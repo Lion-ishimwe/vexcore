@@ -4,7 +4,7 @@ import {
   UserCheck, LogIn, LogOut, Lock, Printer, Download, Plus, Pencil, CreditCard,
   MonitorSmartphone, HardHat, Users, BadgeCheck, Hand, FileSpreadsheet, Upload, Play,
 } from 'lucide-react'
-import { api, fmtDay } from '../api.js'
+import { api, fmtDay, fmtMoney } from '../api.js'
 import { useAuth } from '../auth.jsx'
 import { useT } from '../i18n.jsx'
 import { Modal, Field, ErrorNote, Avatar, useForm } from '../ui.jsx'
@@ -19,7 +19,7 @@ function MethodBadge({ method, by }) {
 }
 
 export default function Attendance() {
-  const { can } = useAuth()
+  const { can, client } = useAuth()
   const { t } = useT()
   const [tab, setTab] = useState('today')
   const [error, setError] = useState(null)
@@ -365,7 +365,7 @@ export default function Attendance() {
 
   const downloadCsv = () => {
     if (!report) return
-    const head = ['Worker', 'Type', ...report.days, 'Days', 'Hours']
+    const head = ['Worker', 'Type', ...report.days, 'Days', 'Hours', ...(report.money ? ['Pay'] : [])]
     const lines = report.rows.map((row) => [
       row.name, row.type,
       ...report.days.map((d) => {
@@ -373,6 +373,7 @@ export default function Attendance() {
         return c ? `${hhmm(c.in)}-${c.out ? hhmm(c.out) : 'open'} (${c.hours ?? '?'}h ${c.method})` : ''
       }),
       row.daysPresent, row.totalHours,
+      ...(report.money ? [row.totalPay ?? 0] : []),
     ])
     const csv = [head, ...lines].map((l) => l.map((v) => `"${String(v).replace(/"/g, '""')}"`).join(',')).join('\n')
     const a = document.createElement('a')
@@ -905,6 +906,7 @@ export default function Attendance() {
                     <th>Worker</th>
                     {report.days.map((d) => <th key={d}>{new Date(d + 'T00:00:00').toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric' })}</th>)}
                     <th>Days</th><th>Hours</th>
+                    {report.money && <th>Pay</th>}
                   </tr>
                 </thead>
                 <tbody>
@@ -926,9 +928,16 @@ export default function Attendance() {
                       })}
                       <td><b>{row.daysPresent}</b></td>
                       <td><b>{row.totalHours}h</b></td>
+                      {report.money && <td><b>{fmtMoney(row.totalPay ?? 0, client?.currency)}</b></td>}
                     </tr>
                   ))}
-                  {!report.rows.length && <tr><td colSpan={report.days.length + 3} className="muted">No attendance in this range.</td></tr>}
+                  {!report.rows.length && <tr><td colSpan={report.days.length + (report.money ? 4 : 3)} className="muted">No attendance in this range.</td></tr>}
+                  {report.money && report.rows.length > 0 && (
+                    <tr>
+                      <td colSpan={report.days.length + 3} style={{ textAlign: 'right' }}><b>Total wages</b></td>
+                      <td><b>{fmtMoney(report.rows.reduce((s, r) => s + (r.totalPay ?? 0), 0), client?.currency)}</b></td>
+                    </tr>
+                  )}
                 </tbody>
               </table>
             </div>

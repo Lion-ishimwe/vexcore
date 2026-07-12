@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
-import { CalendarDays, UserRound, Banknote, Package, CheckCircle2, Camera, X, Plus, FileText, Pencil, Trash2 } from 'lucide-react'
+import { Link } from 'react-router-dom'
+import { CalendarDays, UserRound, Banknote, Package, CheckCircle2, Camera, X, Plus, FileText, Pencil, Trash2, BarChart3 } from 'lucide-react'
 import { api, fmtMoney, fmtDay } from '../api.js'
 import { useAuth } from '../auth.jsx'
 import { Modal, Field, ErrorNote, Lightbox, useForm } from '../ui.jsx'
@@ -77,7 +78,9 @@ export default function Kanban() {
   }
 
   const deletePhase = async (ph) => {
-    const note = ph.materials.length
+    // Only materials drawn via the phase go back to stock - items consumed
+    // through daily reports stay consumed.
+    const note = ph.materials.some((m) => !m.fromUpdate)
       ? '\n\nMaterials drawn by this phase will be returned to stock.' : ''
     if (!window.confirm(`Delete phase "${ph.name}"? This cannot be undone.${note}`)) return
     setToast(null)
@@ -187,6 +190,15 @@ export default function Kanban() {
                       <span><CalendarDays size={12} /> {fmtDay(ph.startDate)} → {fmtDay(ph.endDate)}</span>
                       <span><UserRound size={12} /> {ph.assignee?.name ?? 'Unassigned'}</span>
                       {showMoney && <span><Banknote size={12} /> {fmtMoney(ph.spent, cur)} / {fmtMoney(ph.budget, cur)}</span>}
+                      {showMoney && ph.spent > 0 && (
+                        <span className="muted">
+                          {[
+                            ph.wagesSpent > 0 && `wages ${fmtMoney(ph.wagesSpent, cur)} (${ph.workerDays} worker-day${ph.workerDays === 1 ? '' : 's'})`,
+                            ph.laborSpent > 0 && `crew est. ${fmtMoney(ph.laborSpent, cur)}`,
+                            ph.materialsSpent > 0 && `materials ${fmtMoney(ph.materialsSpent, cur)}`,
+                          ].filter(Boolean).join(' · ')}
+                        </span>
+                      )}
                       {showMoney && ph.budget > 0 && ph.spent / ph.budget > ph.percent / 100 + 0.05 && (
                         <span className="badge red" style={{ alignSelf: 'flex-start' }}>Over budget pace</span>
                       )}
@@ -195,6 +207,11 @@ export default function Kanban() {
                       )}
                       {ph.materials.length > 0 && (
                         <span className="muted"><Package size={12} /> {ph.materials.map((m) => `${m.qty.toLocaleString()} ${m.name}`).join(' · ')}</span>
+                      )}
+                      {ph.status === 'done' && (
+                        <Link to={`/phases/${ph.id}/report`} className="small" style={{ display: 'inline-flex', alignItems: 'center', gap: 5, fontWeight: 600 }}>
+                          <BarChart3 size={12} /> View phase report
+                        </Link>
                       )}
                     </div>
                     <div className={`bar ${ph.percent === 100 ? 'green' : ''}`}>

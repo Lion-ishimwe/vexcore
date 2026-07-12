@@ -17,6 +17,7 @@ import Signup from './pages/Signup.jsx'
 import Dashboard from './pages/Dashboard.jsx'
 import Projects from './pages/Projects.jsx'
 import Kanban from './pages/Kanban.jsx'
+import PhaseReport from './pages/PhaseReport.jsx'
 import Updates from './pages/Updates.jsx'
 import Documents from './pages/Documents.jsx'
 import Attendance from './pages/Attendance.jsx'
@@ -229,6 +230,7 @@ export default function App() {
                 <Route path="/" element={<Dashboard />} />
                 {can('projects.view') && <Route path="/projects" element={<Projects />} />}
                 {can('phases.view') && <Route path="/phases" element={<Kanban />} />}
+                {can('phases.view') && <Route path="/phases/:id/report" element={<PhaseReport />} />}
                 {can('updates.view') && <Route path="/updates" element={<Updates />} />}
                 {can('docs.view') && <Route path="/documents" element={<Documents />} />}
                 {can('attendance.view') && <Route path="/attendance" element={<Attendance />} />}
@@ -250,6 +252,8 @@ export default function App() {
           <nav className="bnav mobile-only">
             {MOBILE_SLOTS.map((s, i) => {
               if (!can(s.cap)) return null
+              // Admins receive daily reports, they don't submit - no FAB.
+              if (s.fab && user.role === 'CLIENT') return null
               if (s.fab) return (
                 <button key="fab" className="bnav-fab" aria-label={t('nav.newUpdate')}
                   onClick={() => nav2('/updates', { state: { openNew: Date.now() } })}>

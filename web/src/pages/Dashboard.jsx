@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
-import { HardHat, Users, Camera, Video, MapPin, DraftingCompass } from 'lucide-react'
+import { Link } from 'react-router-dom'
+import { HardHat, Users, Camera, Video, MapPin, DraftingCompass, CheckCircle2 } from 'lucide-react'
 import { api, fmtMoney, fmtDate } from '../api.js'
 import { useAuth } from '../auth.jsx'
 import { useT } from '../i18n.jsx'
@@ -67,6 +68,18 @@ export default function Dashboard() {
 
   return (
     <>
+      {/* Sign-off notifications: a completed phase links straight to its report */}
+      {d.completedPhases?.length > 0 && d.completedPhases.map((p) => (
+        <div className="card signoff-banner" key={p.id}>
+          <CheckCircle2 size={20} className="signoff-icon" />
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <b>Phase &ldquo;{p.name}&rdquo; is complete - {p.project}</b>
+            <div className="small muted">Signed off by {p.signedOffBy} · {fmtDate(p.signedOffAt)}</div>
+          </div>
+          <Link className="btn sm" to={`/phases/${p.id}/report`}>View phase report</Link>
+        </div>
+      ))}
+
       <div className="grid grid-4">
         <div className="card">
           <h3>{t('dash.activeProjects')}</h3>

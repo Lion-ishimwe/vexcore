@@ -125,7 +125,7 @@ async function rolloverStale(client) {
 const SESSION_INCLUDE = {
   project: { select: { name: true } },
   phase: { select: { name: true } },
-  records: { include: { worker: { select: { id: true, name: true, type: true } } } },
+  records: { include: { worker: { select: { id: true, name: true, type: true, dailyRate: true } } } },
 }
 
 function shapeSession(s, client) {
@@ -532,8 +532,8 @@ r.post('/sessions/:id/scan', requireCap('attendance.record'), async (req, res) =
       return res.json({ action: 'dup', worker: { name: worker.name, type: worker.type }, at: existing.clockInAt })
     }
     const rec = existing
-      ? await db.attendanceRecord.update({ where: { id: existing.id }, data: { clockInAt: new Date(), inMethod: 'auto', inBy: 'card' } })
-      : await db.attendanceRecord.create({ data: { sessionId: session.id, workerId: worker.id, clockInAt: new Date(), inMethod: 'auto', inBy: 'card' } })
+      ? await db.attendanceRecord.update({ where: { id: existing.id }, data: { clockInAt: new Date(), inMethod: 'auto', inBy: 'card', rateSnap: worker.dailyRate } })
+      : await db.attendanceRecord.create({ data: { sessionId: session.id, workerId: worker.id, clockInAt: new Date(), inMethod: 'auto', inBy: 'card', rateSnap: worker.dailyRate } })
     return res.json({ action: 'in', worker: { name: worker.name, type: worker.type }, at: rec.clockInAt })
   }
 
@@ -576,7 +576,7 @@ r.post('/sessions/:id/tick', requireCap('attendance.record'), async (req, res) =
       return res.json({ action: 'undo-in' })
     }
     await db.attendanceRecord.create({
-      data: { sessionId: session.id, workerId: worker.id, clockInAt: new Date(), inMethod: 'manual', inBy: req.user.name },
+      data: { sessionId: session.id, workerId: worker.id, clockInAt: new Date(), inMethod: 'manual', inBy: req.user.name, rateSnap: worker.dailyRate },
     })
     return res.json({ action: 'in' })
   }
@@ -639,6 +639,8 @@ r.get('/report', requireCap('attendance.view'), async (req, res) => {
   const dayKey = (d) =>
     `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
   const days = [...new Set(sessions.map(s => dayKey(s.date)))]
+  // Pay is money - hidden from roles without stock.amounts (Stock Manager).
+  const showMoney = can(req, 'stock.amounts')
   const rows = {}
   for (const s of sessions) {
     const day = dayKey(s.date)
@@ -646,7 +648,7 @@ r.get('/report', requireCap('attendance.view'), async (req, res) => {
       if (!rec.clockInAt) continue
       const row = rows[rec.workerId] ??= {
         workerId: rec.workerId, name: rec.worker.name, type: rec.worker.type,
-        days: {}, totalHours: 0, daysPresent: 0,
+        days: {}, totalHours: 0, daysPresent: 0, totalPay: 0,
       }
       const hours = rec.clockOutAt
         ? Math.max(0, Math.round((rec.clockOutAt - rec.clockInAt) / 360000) / 10)
@@ -676,13 +678,18 @@ r.get('/report', requireCap('attendance.view'), async (req, res) => {
           project: s.project.name, phase: s.phase?.name ?? null,
         }
         row.daysPresent += 1
+        // The daily rate is earned once per day, however many phase sessions
+        // the worker tapped into.
+        row.totalPay += rec.rateSnap ?? rec.worker.dailyRate ?? 0
       }
       row.totalHours = Math.round((row.totalHours + (hours ?? 0)) * 10) / 10
     }
   }
+  const shaped = Object.values(rows).sort((a, b) => a.name.localeCompare(b.name))
+  if (!showMoney) for (const row of shaped) delete row.totalPay
   res.json({
     from: from.toISOString().slice(0, 10), to: to.toISOString().slice(0, 10),
-    days, rows: Object.values(rows).sort((a, b) => a.name.localeCompare(b.name)),
+    days, money: showMoney, rows: shaped,
   })
 })
 

@@ -41,7 +41,7 @@ export default function Reports() {
                     <tr key={ph.id}>
                       <td><b>{ph.name}</b><div className="small muted">{fmtDay(ph.startDate)} → {fmtDay(ph.endDate)}</div></td>
                       <td>{fmtMoney(ph.budget, cur)}</td>
-                      <td>{fmtMoney(ph.spent, cur)}<div className="small muted">labor {fmtMoney(ph.laborSpent, cur)} · materials {fmtMoney(ph.materialsSpent, cur)}</div></td>
+                      <td>{fmtMoney(ph.spent, cur)}<div className="small muted">wages {fmtMoney(ph.wagesSpent, cur)} · crew {fmtMoney(ph.laborSpent, cur)} · materials {fmtMoney(ph.materialsSpent, cur)}</div></td>
                       <td style={{ color: variance < 0 ? 'var(--red)' : 'var(--green)' }}>
                         <b>{variance < 0 ? '−' : '+'}{fmtMoney(Math.abs(variance), cur)}</b>
                       </td>
@@ -58,6 +58,14 @@ export default function Reports() {
                     </tr>
                   )
                 })}
+                {project.unphasedWages > 0 && (
+                  <tr>
+                    <td><b>General site wages</b><div className="small muted">attendance recorded without a phase</div></td>
+                    <td>-</td>
+                    <td>{fmtMoney(project.unphasedWages, cur)}</td>
+                    <td>-</td><td></td><td></td>
+                  </tr>
+                )}
               </tbody>
             </table>
           </div>

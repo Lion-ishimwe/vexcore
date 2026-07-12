@@ -53,11 +53,28 @@ cd web && npm install && npm run dev                                          # 
   attendance. Project filters on stock, workers, badges and cards.
 - Projects → phases → daily updates (photo/video upload, geotag, auto-timestamp), Kanban board
   with phase **edit/delete** (deleting returns drawn materials to stock).
+- **Phase sign-off flow**: when the Senior Engineer marks a phase done, the Admin's
+  dashboard shows a notification banner linking to a per-phase **completion report**
+  (`/phases/:id/report`) - duration planned vs actual, budget vs actual with variance,
+  cost-breakdown donut, daily activity chart, every worker with days + pay, materials
+  used, and the insights checklist. Also reachable from done cards on the Kanban board.
 - **Key insights** per phase: equal-share checklist that derives the phase percent
   (all done = 100%), with optional photo/file proof per insight. Photo proof enforced
   before a phase can be signed off.
-- Phase costs: labor accrues from daily updates × per-phase rates; materials drawn from stock
-  (deducts quantities, snapshots unit cost). Budget-vs-actual + variance in Reports.
+- Phase costs: **worker wages accrue automatically from attendance** - each clocked-in
+  worker earns their daily rate once per day (rate snapshotted on the record at clock-in),
+  attributed to the session's phase. The crew estimate (daily-update counts × per-phase
+  rates) only applies on days with no attendance wages, so nothing double-counts.
+  Materials drawn from stock (deducts quantities, snapshots unit cost).
+  Budget-vs-actual + wages/crew/materials breakdown in Reports; attendance report has a
+  per-worker Pay column with total wages (hidden from roles without money rights).
+- Daily reports close the day: the submit form includes **items used** (picked from the
+  project's stock + general store, quantities validated and **deducted from stock** on
+  submit, name/unit/cost snapshotted). Reports show the day's attended workers with
+  their pay and the items/materials used when they reach the Senior Engineer / Admin
+  (amounts hidden from Site/Guest). Items consumed by a phase-scoped report count into
+  that phase's materials cost. The Admin never submits daily updates - reports reach
+  them via the submit → forward chain (enforced server-side).
 - Stock: consumables + machines (serial required), **CSV template + bulk upload**,
   low-stock alerts, request → approve/reject flow, damaged-item log (hidden from
   Stock Manager). Audit trail on all key actions.

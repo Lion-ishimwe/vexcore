@@ -146,6 +146,8 @@ model Phase {
   budget        Int      @default(0)
   costPerBuilder Int     @default(0)
   costPerHelper  Int     @default(0)
+  signedOffAt   DateTime? // set when the phase is marked done; cleared on reopen
+  signedOffBy   String?
   assigneeId    Int?
   assignee      User?    @relation("assignee", fields: [assigneeId], references: [id])
   orderIdx      Int      @default(0)
@@ -206,9 +208,28 @@ model DailyUpdate {
   createdAt DateTime @default(now())
 
   media     Media[]
+  materials UpdateMaterial[]
 
   @@index([clientId])
   @@index([phaseId])
+}
+
+// Items reported as used in a daily update. Quantities are deducted from
+// stock on submit; name/unit/cost are snapshotted so the report stays true
+// even if the stock item is later edited.
+model UpdateMaterial {
+  id           Int         @id @default(autoincrement())
+  updateId     Int
+  update       DailyUpdate @relation(fields: [updateId], references: [id])
+  stockItemId  Int
+  stockItem    StockItem   @relation(fields: [stockItemId], references: [id])
+  nameSnap     String
+  unitSnap     String      @default("pcs")
+  qty          Int
+  unitCostSnap Int
+  createdAt    DateTime    @default(now())
+
+  @@index([updateId])
 }
 
 model Media {
@@ -235,6 +256,7 @@ model StockItem {
   createdAt    DateTime @default(now())
 
   materials    PhaseMaterial[]
+  usedInUpdates UpdateMaterial[]
 
   @@index([clientId])
   @@index([projectId])
@@ -401,6 +423,7 @@ model AttendanceRecord {
   outMethod  String?
   inBy       String? // 'card' or the recorder's name
   outBy      String?
+  rateSnap   Int? // worker's daily rate captured at clock-in - the amount actually owed for this day
 
   @@unique([sessionId, workerId])
   @@index([sessionId])

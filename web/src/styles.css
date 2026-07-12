@@ -1449,3 +1449,17 @@ a.plain { color: var(--blue); text-decoration: none; }
   .mk-foot-grid { grid-template-columns: 1fr 1fr; }
   .mk-links { display: none; }
 }
+
+/* ---- Daily report cost blocks: workers attended + items used ---- */
+.update-costs { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 10px; margin-top: 10px; }
+.cost-block { border: 1px solid var(--border); border-radius: 10px; padding: 9px 12px; background: var(--bg); }
+.cost-head { display: flex; justify-content: space-between; align-items: center; gap: 8px; font-size: 12.5px; font-weight: 600; margin-bottom: 6px; }
+.cost-head span, .cost-head b { display: inline-flex; align-items: center; gap: 5px; }
+.cost-line { display: flex; justify-content: space-between; gap: 10px; font-size: 12.5px; padding: 2px 0; border-top: 1px dashed var(--border); }
+.cost-line:first-of-type { border-top: 0; }
+.item-add { display: flex; gap: 6px; }
+.item-add select { flex: 1; min-width: 0; }
+
+/* ---- Phase sign-off notification banner on the dashboard ---- */
+.signoff-banner { display: flex; align-items: center; gap: 12px; margin-bottom: 12px; border-left: 4px solid #16a34a; }
+.signoff-icon { color: #16a34a; flex-shrink: 0; }

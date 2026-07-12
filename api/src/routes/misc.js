@@ -7,6 +7,7 @@ import { requireCap, can, settingsOf, capsFor, DEFAULT_SETTINGS } from '../auth.
 import { PLANS } from '../plans.js'
 import { scopedProjectIds, projectScopeWhere } from '../scope.js'
 import { ensureSystemFolders } from './docs.js'
+import { wagesForProjects } from './projects.js'
 
 const r = Router()
 
@@ -258,13 +259,17 @@ r.get('/weather', requireCap('dashboard'), async (req, res) => {
 r.get('/dashboard', requireCap('dashboard'), async (req, res) => {
   const cid = req.client.id
   const ids = await scopedProjectIds(req)
-  const [projects, phases, stockItems, updates] = await Promise.all([
+  const [projects, phases, stockItems, consumed, updates] = await Promise.all([
     db.project.findMany({ where: { clientId: cid, ...(ids ? { id: { in: ids } } : {}) } }),
     db.phase.findMany({
       where: { project: { clientId: cid }, ...(ids ? { projectId: { in: ids } } : {}) },
       include: { materials: true, updates: true, project: { select: { name: true } } },
     }),
     db.stockItem.findMany({ where: { clientId: cid, ...projectScopeWhere(ids) } }),
+    // Items reported as used in daily updates - deducted from stock on submit.
+    db.updateMaterial.findMany({
+      where: { update: { clientId: cid, ...(ids ? { projectId: { in: ids } } : {}) } },
+    }),
     db.dailyUpdate.findMany({
       where: {
         clientId: cid,
@@ -277,15 +282,31 @@ r.get('/dashboard', requireCap('dashboard'), async (req, res) => {
   ])
 
   const showMoney = can(req, 'stock.amounts')
-  const phaseSpend = ph =>
-    ph.updates.reduce((s, u) => s + u.builders * ph.costPerBuilder + u.helpers * ph.costPerHelper, 0) +
-    ph.materials.reduce((s, m) => s + m.qty * m.unitCostSnap, 0)
+
+  // Same cost model as Projects/Reports: attendance wages + crew estimate
+  // (only on days without wages) + materials drawn via phases. Items consumed
+  // through daily reports and project-wide (unphased) wages are added below.
+  const { byPhase, unphased } = await wagesForProjects(cid, projects.map(p => p.id))
+  const dayOf = d =>
+    `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+  const phaseSpend = ph => {
+    let wages = 0
+    const paidDays = new Set()
+    for (const [day, cell] of byPhase.get(ph.id) ?? []) { wages += cell.amount; paidDays.add(day) }
+    const labor = ph.updates.reduce((s, u) => paidDays.has(dayOf(u.createdAt)) ? s
+      : s + u.builders * ph.costPerBuilder + u.helpers * ph.costPerHelper, 0)
+    return wages + labor + ph.materials.reduce((s, m) => s + m.qty * m.unitCostSnap, 0)
+  }
 
   const overall = phases.length ? Math.round(phases.reduce((s, p) => s + p.percent, 0) / phases.length) : 0
-  const totalSpent = phases.reduce((s, p) => s + phaseSpend(p), 0)
+  const consumedValue = consumed.reduce((s, m) => s + m.qty * m.unitCostSnap, 0)
+  const totalSpent = phases.reduce((s, p) => s + phaseSpend(p), 0) + consumedValue +
+    [...unphased.values()].reduce((a, b) => a + b, 0)
   const totalBudget = projects.reduce((s, p) => s + p.budget, 0)
   const stockValue = stockItems.reduce((s, i) => s + i.qty * i.unitCost, 0)
-  const drawn = phases.flatMap(p => p.materials).reduce((s, m) => s + m.qty * m.unitCostSnap, 0)
+  // Stock used = everything that left stock (drawn into phases + consumed in
+  // daily reports) vs what remains on the shelves.
+  const drawn = phases.flatMap(p => p.materials).reduce((s, m) => s + m.qty * m.unitCostSnap, 0) + consumedValue
   const stockUsedPct = drawn + stockValue > 0 ? Math.round((drawn / (drawn + stockValue)) * 100) : 0
 
   // Design slider: images in the system "Design" folder, respecting folder
@@ -304,8 +325,28 @@ r.get('/dashboard', requireCap('dashboard'), async (req, res) => {
     designImages = imgs.map(d => ({ url: '/uploads/' + d.path, name: d.name }))
   }
 
+  // Sign-off notifications for the account admin: phases completed in the
+  // last 30 days, newest first, each linking to its phase report page.
+  let completedPhases = []
+  if (req.user.role === 'CLIENT') {
+    const recent = await db.phase.findMany({
+      where: {
+        project: { clientId: cid }, ...(ids ? { projectId: { in: ids } } : {}),
+        status: 'done', signedOffAt: { gte: new Date(Date.now() - 30 * 86400000) },
+      },
+      include: { project: { select: { name: true } } },
+      orderBy: { signedOffAt: 'desc' },
+      take: 5,
+    })
+    completedPhases = recent.map(p => ({
+      id: p.id, name: p.name, project: p.project.name,
+      signedOffAt: p.signedOffAt, signedOffBy: p.signedOffBy,
+    }))
+  }
+
   res.json({
     designImages,
+    completedPhases,
     activeProjects: projects.filter(p => p.status === 'In progress').length,
     totalProjects: projects.length,
     overallPercent: overall,
