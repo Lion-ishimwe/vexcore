@@ -1,0 +1,419 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "mysql"
+  url      = env("DATABASE_URL")
+}
+
+model Client {
+  id        Int      @id @default(autoincrement())
+  company   String
+  contact   String?
+  country   String?
+  location  String?
+  tin       String?
+  currency  String   @default("RWF")
+  status    String   @default("TRIAL") // TRIAL | ACTIVE | SUSPENDED | TERMINATED
+  trialEndsAt DateTime?
+  plan      String?  // STARTER | PRO | ENTERPRISE (null until first subscription)
+  paidUntil DateTime? // subscription covered through this date
+  settings  Json?
+  createdAt DateTime @default(now())
+
+  users     User[]
+  projects  Project[]
+  stock     StockItem[]
+  requests  StockRequest[]
+  damaged   DamagedItem[]
+  messages  Message[]
+  audit     AuditLog[]
+  updates   DailyUpdate[]
+  workers   Worker[]
+  attendanceSessions AttendanceSession[]
+  cardIssues CardIssue[]
+  payments  Payment[]
+}
+
+// Manual MoMo subscription payments: the client creates a payment intent at
+// checkout, sends the money by phone, submits the payer number, and the
+// platform Super Admin confirms receipt (a payment-provider API can replace
+// the manual confirm later).
+model Payment {
+  id          Int      @id @default(autoincrement())
+  clientId    Int
+  client      Client   @relation(fields: [clientId], references: [id])
+  plan        String   // STARTER | PRO
+  months      Int      @default(1)
+  amount      Int
+  currency    String   @default("RWF")
+  reference   String   @unique // shown in the MoMo transfer note, e.g. BR-7K2M4Q
+  method      String   @default("momo")
+  payerPhone  String?
+  status      String   @default("PENDING") // PENDING | CONFIRMED | REJECTED | CANCELED
+  submittedAt DateTime? // when the client said "I sent the money"
+  confirmedAt DateTime?
+  confirmedBy String?
+  note        String?
+  createdAt   DateTime @default(now())
+
+  @@index([clientId])
+  @@index([status])
+}
+
+model User {
+  id           Int      @id @default(autoincrement())
+  clientId     Int?
+  client       Client?  @relation(fields: [clientId], references: [id])
+  name         String
+  email        String   @unique
+  passwordHash String
+  role         String   // SUPER | CLIENT | SENIOR | SITE | STOCK | GUEST
+  language     String   @default("en") // en | fr | rw
+  totpSecret   String?
+  totpEnabled  Boolean  @default(false)
+  backupCodes  Json? // sha256 hashes of unused one-time backup codes
+  createdAt    DateTime @default(now())
+
+  updates      DailyUpdate[]
+  messages     Message[]
+  requests     StockRequest[]
+  resetTokens  ResetToken[]
+  phases       Phase[]  @relation("assignee")
+  documents    Document[]
+  memberships  ProjectMember[]
+
+  @@index([clientId])
+}
+
+model ResetToken {
+  id        Int      @id @default(autoincrement())
+  userId    Int
+  user      User     @relation(fields: [userId], references: [id])
+  token     String   @unique
+  expiresAt DateTime
+}
+
+model Project {
+  id        Int      @id @default(autoincrement())
+  clientId  Int
+  client    Client   @relation(fields: [clientId], references: [id])
+  name      String
+  location  String?
+  status    String   @default("Planning") // Planning | In progress | Done
+  currency  String   @default("RWF")
+  budget    Int      @default(0)
+  documents Json?
+  createdAt DateTime @default(now())
+
+  phases    Phase[]
+  updates   DailyUpdate[]
+  attendanceSessions AttendanceSession[]
+  members   ProjectMember[]
+  stock     StockItem[]
+  stockRequests StockRequest[]
+  damaged   DamagedItem[]
+  workers   Worker[]
+
+  @@index([clientId])
+}
+
+// Project-scoped team: each project has its own senior/site engineers, stock
+// manager and guests. A user on no projects sees everything (legacy default);
+// once assigned, they only see their projects' data.
+model ProjectMember {
+  id        Int     @id @default(autoincrement())
+  projectId Int
+  project   Project @relation(fields: [projectId], references: [id])
+  userId    Int
+  user      User    @relation(fields: [userId], references: [id])
+  createdAt DateTime @default(now())
+
+  @@unique([projectId, userId])
+  @@index([userId])
+}
+
+model Phase {
+  id            Int      @id @default(autoincrement())
+  projectId     Int
+  project       Project  @relation(fields: [projectId], references: [id])
+  name          String
+  status        String   @default("todo") // todo | active | done
+  percent       Int      @default(0)
+  startDate     DateTime?
+  endDate       DateTime?
+  budget        Int      @default(0)
+  costPerBuilder Int     @default(0)
+  costPerHelper  Int     @default(0)
+  assigneeId    Int?
+  assignee      User?    @relation("assignee", fields: [assigneeId], references: [id])
+  orderIdx      Int      @default(0)
+  createdAt     DateTime @default(now())
+
+  materials     PhaseMaterial[]
+  updates       DailyUpdate[]
+  insights      KeyInsight[]
+  attendanceSessions AttendanceSession[]
+
+  @@index([projectId])
+}
+
+model KeyInsight {
+  id        Int       @id @default(autoincrement())
+  phaseId   Int
+  phase     Phase     @relation(fields: [phaseId], references: [id])
+  title     String
+  done      Boolean   @default(false)
+  doneAt    DateTime?
+  doneBy    String?
+  media     Json? // proof attachments: [{ kind, path, name }]
+  orderIdx  Int       @default(0)
+  createdAt DateTime  @default(now())
+
+  @@index([phaseId])
+}
+
+model PhaseMaterial {
+  id           Int       @id @default(autoincrement())
+  phaseId      Int
+  phase        Phase     @relation(fields: [phaseId], references: [id])
+  stockItemId  Int
+  stockItem    StockItem @relation(fields: [stockItemId], references: [id])
+  nameSnap     String
+  qty          Int
+  unitCostSnap Int
+  createdAt    DateTime  @default(now())
+
+  @@index([phaseId])
+}
+
+model DailyUpdate {
+  id        Int      @id @default(autoincrement())
+  clientId  Int
+  client    Client   @relation(fields: [clientId], references: [id])
+  projectId Int
+  project   Project  @relation(fields: [projectId], references: [id])
+  phaseId   Int?
+  phase     Phase?   @relation(fields: [phaseId], references: [id])
+  userId    Int
+  user      User     @relation(fields: [userId], references: [id])
+  builders  Int      @default(0)
+  helpers   Int      @default(0)
+  note      String?  @db.Text
+  geotag    String?
+  forwarded Boolean  @default(false)
+  createdAt DateTime @default(now())
+
+  media     Media[]
+
+  @@index([clientId])
+  @@index([phaseId])
+}
+
+model Media {
+  id       Int         @id @default(autoincrement())
+  updateId Int
+  update   DailyUpdate @relation(fields: [updateId], references: [id])
+  kind     String // photo | video
+  path     String
+}
+
+model StockItem {
+  id           Int      @id @default(autoincrement())
+  clientId     Int
+  client       Client   @relation(fields: [clientId], references: [id])
+  projectId    Int?     // null = general store (visible to everyone with stock caps)
+  project      Project? @relation(fields: [projectId], references: [id])
+  name         String
+  category     String   @default("Consumable") // Consumable | Machine
+  qty          Int      @default(0)
+  unit         String   @default("pcs")
+  unitCost     Int      @default(0)
+  serial       String?
+  lowThreshold Int      @default(0)
+  createdAt    DateTime @default(now())
+
+  materials    PhaseMaterial[]
+
+  @@index([clientId])
+  @@index([projectId])
+}
+
+model StockRequest {
+  id            Int      @id @default(autoincrement())
+  clientId      Int
+  client        Client   @relation(fields: [clientId], references: [id])
+  projectId     Int?
+  project       Project? @relation(fields: [projectId], references: [id])
+  itemName      String
+  qty           String
+  note          String?
+  status        String   @default("PENDING") // PENDING | APPROVED | REJECTED
+  requestedById Int
+  requestedBy   User     @relation(fields: [requestedById], references: [id])
+  createdAt     DateTime @default(now())
+
+  @@index([clientId])
+}
+
+model DamagedItem {
+  id        Int      @id @default(autoincrement())
+  clientId  Int
+  client    Client   @relation(fields: [clientId], references: [id])
+  projectId Int?
+  project   Project? @relation(fields: [projectId], references: [id])
+  name      String
+  serial    String?
+  note      String?
+  createdAt DateTime @default(now())
+
+  @@index([clientId])
+}
+
+model Message {
+  id          Int      @id @default(autoincrement())
+  clientId    Int
+  client      Client   @relation(fields: [clientId], references: [id])
+  userId      Int
+  user        User     @relation(fields: [userId], references: [id])
+  text        String   @db.Text
+  attachments Json?
+  recipientId Int? // null = whole-company channel; set = private DM to that user
+  createdAt   DateTime @default(now())
+
+  @@index([clientId])
+}
+
+// Singleton row (id 1) for platform-wide Super Admin settings.
+model PlatformSettings {
+  id                   Int @id @default(1)
+  renewalReminderDays  Int @default(5)
+}
+
+model DemoBooking {
+  id        Int      @id @default(autoincrement())
+  slot      DateTime @unique
+  name      String
+  company   String?
+  email     String
+  phone     String?
+  teamSize  String?
+  interests Json?
+  createdAt DateTime @default(now())
+}
+
+model Folder {
+  id         Int      @id @default(autoincrement())
+  clientId   Int
+  name       String
+  system     Boolean  @default(false) // Design, Project Documents - fixed folders
+  restricted Boolean  @default(false) // system folders: true = client-only access
+  createdAt  DateTime @default(now())
+
+  documents  Document[]
+
+  @@index([clientId])
+}
+
+model Document {
+  id         Int      @id @default(autoincrement())
+  clientId   Int
+  folderId   Int?
+  folder     Folder?  @relation(fields: [folderId], references: [id])
+  name       String
+  path       String
+  kind       String   @default("file") // image | video | pdf | file
+  visibility String   @default("public") // public = company; private = uploader + client
+  uploaderId Int
+  uploader   User     @relation(fields: [uploaderId], references: [id])
+  createdAt  DateTime @default(now())
+
+  @@index([clientId])
+  @@index([folderId])
+}
+
+model Worker {
+  id        Int      @id @default(autoincrement())
+  clientId  Int
+  client    Client   @relation(fields: [clientId], references: [id])
+  projectId Int?     // null = works across the whole account
+  project   Project? @relation(fields: [projectId], references: [id])
+  name      String
+  type      String   @default("builder") // builder | helper
+  phone     String?
+  cardId    String? // RFID/NFC/QR badge id - enrolled once, tapped daily
+  dailyRate Int?
+  active    Boolean  @default(true)
+  createdAt DateTime @default(now())
+
+  records   AttendanceRecord[]
+  issues    CardIssue[]
+
+  @@unique([clientId, cardId])
+  @@index([clientId])
+}
+
+model CardIssue {
+  id        Int      @id @default(autoincrement())
+  clientId  Int
+  client    Client   @relation(fields: [clientId], references: [id])
+  workerId  Int
+  worker    Worker   @relation(fields: [workerId], references: [id])
+  cardId    String
+  issuedBy  String
+  createdAt DateTime @default(now())
+
+  @@index([clientId])
+}
+
+model AttendanceSession {
+  id        Int      @id @default(autoincrement())
+  clientId  Int
+  client    Client   @relation(fields: [clientId], references: [id])
+  projectId Int
+  project   Project  @relation(fields: [projectId], references: [id])
+  phaseId   Int?
+  phase     Phase?   @relation(fields: [phaseId], references: [id])
+  date      DateTime // start of the working day
+  mode      String   @default("in") // in | out | closed
+  paused    Boolean  @default(false) // open but not receiving taps; one live session per project
+  openedBy  String
+  closedBy  String?
+  openedAt  DateTime @default(now())
+  closedAt  DateTime?
+
+  records   AttendanceRecord[]
+
+  @@index([clientId])
+  @@index([projectId])
+}
+
+model AttendanceRecord {
+  id         Int               @id @default(autoincrement())
+  sessionId  Int
+  session    AttendanceSession @relation(fields: [sessionId], references: [id])
+  workerId   Int
+  worker     Worker            @relation(fields: [workerId], references: [id])
+  clockInAt  DateTime?
+  clockOutAt DateTime?
+  inMethod   String? // auto | manual
+  outMethod  String?
+  inBy       String? // 'card' or the recorder's name
+  outBy      String?
+
+  @@unique([sessionId, workerId])
+  @@index([sessionId])
+}
+
+model AuditLog {
+  id        Int      @id @default(autoincrement())
+  clientId  Int
+  client    Client   @relation(fields: [clientId], references: [id])
+  userName  String
+  action    String
+  detail    String?
+  createdAt DateTime @default(now())
+
+  @@index([clientId])
+}

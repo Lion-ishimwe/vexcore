@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Bridge Construction</title>
+    <link rel="icon" type="image/png" href="/logo.png" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@400;500;600;700;800&family=Caveat:wght@600;700&display=swap" rel="stylesheet" />
+  </head>
+  <body>
+    <div id="root"></div>
+    <script>
+      // If the app crashes before rendering, show the error instead of a blank page.
+      window.addEventListener('error', function (e) {
+        var root = document.getElementById('root')
+        if (root && !root.childElementCount) {
+          root.innerHTML = '<div style="font-family:system-ui;max-width:640px;margin:80px auto;padding:24px;background:#fff;border:1px solid #fca5a5;border-radius:12px">' +
+            '<h3 style="color:#991b1b;margin-bottom:8px">The app failed to start</h3>' +
+            '<pre style="white-space:pre-wrap;font-size:12px;color:#374151">' + (e.message || e.error) + '</pre>' +
+            '<p style="font-size:13px;color:#6b7280;margin-top:10px">Try a hard refresh (Ctrl+Shift+R). If it persists, share this message.</p></div>'
+        }
+      })
+    </script>
+    <script type="module" src="/src/main.jsx"></script>
+  </body>
+</html>

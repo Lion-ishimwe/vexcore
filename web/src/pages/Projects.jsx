@@ -1,0 +1,156 @@
+import { useEffect, useState } from 'react'
+import { MapPin, Paperclip, Users } from 'lucide-react'
+import { api, fmtMoney } from '../api.js'
+import { useAuth } from '../auth.jsx'
+import { Modal, Field, ErrorNote, useForm } from '../ui.jsx'
+
+const statusBadge = { 'In progress': 'blue', Planning: 'gray', Done: 'green' }
+const ROLE_LABEL = { SENIOR: 'Senior Engineer', SITE: 'Site Engineer', STOCK: 'Stock Manager', GUEST: 'Guest' }
+
+export default function Projects() {
+  const { client, can } = useAuth()
+  const [projects, setProjects] = useState(null)
+  const [error, setError] = useState(null)
+  const [creating, setCreating] = useState(false)
+  const [v, set, setAll] = useForm({ name: '', location: '', budget: '' })
+  const [formError, setFormError] = useState(null)
+  // per-project team assignment
+  const [teamFor, setTeamFor] = useState(null) // project being edited
+  const [staff, setStaff] = useState(null) // assignable client users
+  const [picked, setPicked] = useState([])
+  const [teamErr, setTeamErr] = useState(null)
+  const [busy, setBusy] = useState(false)
+
+  const load = () => api('/projects').then(setProjects).catch((e) => setError(e.message))
+  useEffect(() => { load() }, [])
+
+  const create = async (e) => {
+    e.preventDefault()
+    setFormError(null)
+    try {
+      await api('/projects', { method: 'POST', body: v })
+      setCreating(false); setAll({ name: '', location: '', budget: '' })
+      load()
+    } catch (err) { setFormError(err.message) }
+  }
+
+  const openTeam = async (p) => {
+    setTeamErr(null)
+    setTeamFor(p)
+    setPicked(p.team.map((m) => m.id))
+    if (!staff) {
+      try {
+        const all = await api('/team')
+        setStaff(all.filter((u) => ['SENIOR', 'SITE', 'STOCK', 'GUEST'].includes(u.role)))
+      } catch (err) { setTeamErr(err.message) }
+    }
+  }
+
+  const saveTeam = async (e) => {
+    e.preventDefault()
+    setBusy(true); setTeamErr(null)
+    try {
+      await api(`/projects/${teamFor.id}/team`, { method: 'PUT', body: { userIds: picked } })
+      setTeamFor(null)
+      load()
+    } catch (err) { setTeamErr(err.message) } finally { setBusy(false) }
+  }
+
+  if (error) return <div className="error-note">{error}</div>
+  if (!projects) return <div className="spin">Loading projects…</div>
+  const showMoney = can('stock.amounts')
+  const cur = client?.currency
+  const canAssign = can('team.create')
+
+  return (
+    <>
+      <div className="flex-between" style={{ marginBottom: 16 }}>
+        <p className="muted">All projects for this account. Each holds its documents, designs, phases, team, stock and workers.</p>
+        {can('projects.create') && <button className="btn" onClick={() => setCreating(true)}>+ New Project</button>}
+      </div>
+      <div className="grid grid-3">
+        {projects.map((p) => (
+          <div className="card" key={p.id}>
+            <div className="flex-between">
+              <b style={{ fontSize: 15 }}>{p.name}</b>
+              <span className={`badge ${statusBadge[p.status] ?? 'gray'}`}>{p.status}</span>
+            </div>
+            <div className="sub"><MapPin size={12} /> {p.location ?? '-'}</div>
+            <div className="bar mt"><span style={{ width: `${p.percent}%` }} /></div>
+            <div className="flex-between mt small">
+              <span className="muted">Progress</span><b>{p.percent}%</b>
+            </div>
+            {showMoney && (
+              <div className="flex-between small" style={{ marginTop: 6 }}>
+                <span className="muted">Spent / Budget</span>
+                <b>{fmtMoney(p.spent, cur)} / {fmtMoney(p.budget, cur)}</b>
+              </div>
+            )}
+            <div className="flex-between small" style={{ marginTop: 6 }}>
+              <span className="muted">Phases</span><b>{p.phases.length}</b>
+            </div>
+            <div className="flex-between small" style={{ marginTop: 6 }}>
+              <span className="muted">Team</span>
+              <b>{p.team.length ? `${p.team.length} assigned` : 'Everyone'}</b>
+            </div>
+            {p.team.length > 0 && (
+              <div className="chips mt">
+                {p.team.map((m) => <span className="chip" key={m.id}>{m.name}</span>)}
+              </div>
+            )}
+            {p.documents.length > 0 && (
+              <div className="chips mt">
+                {p.documents.map((d) => <span className="chip" key={d}><Paperclip size={11} /> {d}</span>)}
+              </div>
+            )}
+            {canAssign && (
+              <button className="btn ghost sm mt" onClick={() => openTeam(p)}>
+                <Users size={13} /> Assign team
+              </button>
+            )}
+          </div>
+        ))}
+        {!projects.length && <div className="muted">No projects yet - create your first one.</div>}
+      </div>
+
+      {creating && (
+        <Modal title="New Project" onClose={() => setCreating(false)}>
+          <ErrorNote error={formError} />
+          <form onSubmit={create}>
+            <Field label="Project name *"><input value={v.name} onChange={set('name')} required autoFocus /></Field>
+            <Field label="Location"><input value={v.location} onChange={set('location')} placeholder="City / site" /></Field>
+            <Field label={`Budget (${cur})`}><input type="number" min="0" value={v.budget} onChange={set('budget')} /></Field>
+            <button className="btn" style={{ width: '100%', justifyContent: 'center' }}>Create project</button>
+          </form>
+        </Modal>
+      )}
+
+      {teamFor && (
+        <Modal title={`Team - ${teamFor.name}`} onClose={() => setTeamFor(null)}>
+          <ErrorNote error={teamErr} />
+          <p className="small muted" style={{ marginBottom: 12 }}>
+            Pick who works on this project. Assigned members see only their projects'
+            phases, stock, workers and attendance. Members on no project see everything.
+          </p>
+          {!staff ? <div className="spin">Loading team…</div> : (
+            <form onSubmit={saveTeam}>
+              <div className="assign-list">
+                {staff.map((u) => (
+                  <label key={u.id} className="assign-row">
+                    <input type="checkbox" checked={picked.includes(u.id)}
+                      onChange={(e) => setPicked((s) => e.target.checked ? [...s, u.id] : s.filter((x) => x !== u.id))} />
+                    <span className="assign-name"><b>{u.name}</b> <span className="muted small">{ROLE_LABEL[u.role] ?? u.role}</span></span>
+                  </label>
+                ))}
+                {!staff.length && <p className="muted small">No team members yet - add them on the Team page first.</p>}
+              </div>
+              <button className="btn mt" style={{ width: '100%', justifyContent: 'center' }} disabled={busy}>
+                Save team ({picked.length ? `${picked.length} member${picked.length > 1 ? 's' : ''}` : 'open to everyone'})
+              </button>
+            </form>
+          )}
+        </Modal>
+      )}
+    </>
+  )
+}
