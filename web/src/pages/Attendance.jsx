@@ -218,18 +218,26 @@ export default function Attendance() {
 
   // One template for everyone: pick/type a name, Generate renders their card.
   // Every generation is recorded so the Cards tab keeps the issue history.
+  // Workers AND team members share the flow - a team pick posts userId instead.
+  const cardCandidates = () => [
+    ...(badges?.workers ?? []),
+    ...(badges?.team ?? []).map((u) => ({
+      id: u.id, name: u.name, cardId: u.cardId, photo: u.photo, qr: u.qr,
+      type: u.role === 'CLIENT' ? 'admin' : u.role.toLowerCase(), phone: null, staff: true,
+    })),
+  ]
   const generateCard = async () => {
     setCardError(null)
     const q = cardName.trim().toLowerCase()
     if (!q) return setCardError('Type or select an employee name')
-    const list = badges?.workers ?? []
+    const list = cardCandidates()
     const w = list.find((x) => x.name.toLowerCase() === q)
       ?? (list.filter((x) => x.name.toLowerCase().includes(q)).length === 1
         ? list.find((x) => x.name.toLowerCase().includes(q))
         : null)
     if (!w) return setCardError(`No single employee matches "${cardName}" - pick a name from the list`)
     try {
-      await api('/attendance/cards', { method: 'POST', body: { workerId: w.id } })
+      await api('/attendance/cards', { method: 'POST', body: w.staff ? { userId: w.id } : { workerId: w.id } })
     } catch (err) { return setCardError(err.message) }
     setCardWorker(w)
     setCardModal(false)
@@ -349,7 +357,7 @@ export default function Attendance() {
     ctx.textAlign = 'left'; ctx.fillStyle = '#10151d'; ctx.font = F(800, 33)
     ctx.fillText(c.name, textX, 180)
     ctx.fillStyle = '#b45309'; ctx.font = F(800, 15)
-    ctx.fillText(spaced('- ' + (c.type === 'helper' ? 'HELPER' : 'BUILDER')), textX, 214)
+    ctx.fillText(spaced('- ' + String(c.type ?? 'worker').toUpperCase()), textX, 214)
     if (c.phone) {
       ctx.fillStyle = '#94a3b8'; ctx.font = F(800, 13)
       ctx.fillText(spaced('TEL'), photoImg ? textX : 44, 292)
@@ -812,7 +820,9 @@ export default function Attendance() {
           </div>
           {!badges ? <div className="spin">Loading…</div> : cardWorker ? (
             (() => {
-              const w = badges.workers.find((x) => x.id === cardWorker.id) ?? cardWorker
+              const w = cardWorker.staff
+                ? cardWorker
+                : badges.workers.find((x) => x.id === cardWorker.id) ?? cardWorker
               return (
                 <div className="id-card-wrap">
                   <div className="id-pair">
@@ -832,7 +842,7 @@ export default function Attendance() {
                               {!w.photo && <span className="idc2-init">{w.name.split(' ').map((p) => p[0]).join('').slice(0, 2)}</span>}
                               <div>
                                 <b>{w.name}</b>
-                                <span className="idc2-role">- {w.type === 'helper' ? 'HELPER' : 'BUILDER'}</span>
+                                <span className="idc2-role">- {String(w.type ?? 'worker').toUpperCase()}</span>
                               </div>
                             </div>
                             {w.phone && <div className="idc2-tel"><span>TEL</span>{w.phone}</div>}
@@ -886,6 +896,25 @@ export default function Attendance() {
               {!badges.workers.filter(matchProj).length && <p className="muted">No active workers{projF ? ' for this project' : ''}.</p>}
             </div>
           )}
+          {badges && !cardWorker && badges.team?.length > 0 && (
+            <>
+              <div className="section-title">Team member badges</div>
+              <div className="badge-sheet">
+                {badges.team.map((u) => (
+                  <div className="worker-badge" key={'u' + u.id}>
+                    <div className="wb-head">
+                      <img className="wb-logo" src={badges.logo || '/logo.png'} alt="" /> {badges.company}
+                    </div>
+                    {u.photo && <img className="wb-photo" src={u.photo} alt={u.name} />}
+                    <b>{u.name}</b>
+                    <span className="wb-type">{u.role === 'CLIENT' ? 'admin' : u.role.toLowerCase()}</span>
+                    <img src={u.qr} alt="QR" />
+                    <code>{u.cardId}</code>
+                  </div>
+                ))}
+              </div>
+            </>
+          )}
 
           {cardModal && (
             <Modal title="Create a card" onClose={() => setCardModal(false)}>
@@ -898,6 +927,7 @@ export default function Attendance() {
               </Field>
               <datalist id="card-workers">
                 {(badges?.workers ?? []).map((w) => <option key={w.id} value={w.name} />)}
+                {(badges?.team ?? []).map((u) => <option key={'u' + u.id} value={u.name} />)}
               </datalist>
               <button className="btn" style={{ width: '100%', justifyContent: 'center' }} onClick={generateCard}>
                 <CreditCard size={14} /> Generate card

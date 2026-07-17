@@ -1,10 +1,10 @@
 import { useEffect, useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
 import {
-  Printer, History, Download, BarChart3, Users, Package, AlertTriangle,
-  CheckCircle2, CalendarDays, Banknote, HardHat, Search,
+  Printer, Download, BarChart3, Users, Package, AlertTriangle,
+  CheckCircle2, CalendarDays, Banknote, HardHat,
 } from 'lucide-react'
-import { api, fmtMoney, fmtDay, fmtDate } from '../api.js'
+import { api, fmtMoney, fmtDay } from '../api.js'
 import { useAuth } from '../auth.jsx'
 import { Avatar } from '../ui.jsx'
 
@@ -15,7 +15,6 @@ const TABS = [
   ['phases', 'Projects & Phases'],
   ['labor', 'Labor & Attendance'],
   ['materials', 'Materials & Stock'],
-  ['audit', 'Audit'],
 ]
 
 const day = (d) => d.toISOString().slice(0, 10)
@@ -144,7 +143,6 @@ export default function Reports() {
   const [f, setF] = useState({ from: daysAgo(29), to: day(new Date()), projectId: '', phaseId: '' })
   const [d, setD] = useState(null)
   const [error, setError] = useState(null)
-  const [auditQ, setAuditQ] = useState('')
 
   const applyPreset = (p) => {
     setPreset(p)
@@ -174,9 +172,6 @@ export default function Reports() {
     ...d.phases.filter((p) => p.late).map((p) => ({ icon: CalendarDays, text: `${p.name} (${p.project}) is past its planned end date (${fmtDay(p.endDate)})` })),
     ...(d.materials.lowStock.length ? [{ icon: Package, text: `Low stock: ${d.materials.lowStock.join(', ')}` }] : []),
   ]
-  const auditShown = d.audit.filter((a) =>
-    !auditQ || `${a.userName} ${a.action} ${a.detail ?? ''}`.toLowerCase().includes(auditQ.toLowerCase()))
-
   return (
     <>
       {/* -------- Global filters: every number below answers for this slice -------- */}
@@ -391,29 +386,6 @@ export default function Reports() {
       )}
 
       {/* ---------------- AUDIT ---------------- */}
-      {tab === 'audit' && (
-        <div className="card">
-          <div className="flex-between" style={{ marginBottom: 12, gap: 10, flexWrap: 'wrap' }}>
-            <h3 style={{ margin: 0 }}>Audit trail ({d.from} → {d.to})</h3>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-              <Search size={13} className="muted" />
-              <input placeholder="Filter by user, action, detail…" value={auditQ}
-                onChange={(e) => setAuditQ(e.target.value)}
-                style={{ padding: '7px 10px', borderRadius: 8, border: '1px solid var(--border)', fontSize: 12.5, minWidth: 220 }} />
-            </div>
-          </div>
-          <div className="small" style={{ lineHeight: 2.1 }}>
-            {auditShown.map((a, i) => (
-              <div key={i} style={{ display: 'flex', alignItems: 'baseline', gap: 7 }}>
-                <History size={12} style={{ flexShrink: 0, transform: 'translateY(1px)' }} />
-                <span><b>{a.userName}</b> - {a.action}{a.detail ? `: ${a.detail}` : ''}
-                  <span className="muted"> · {fmtDate(a.createdAt)}</span></span>
-              </div>
-            ))}
-            {!auditShown.length && <span className="muted">No audit entries match.</span>}
-          </div>
-        </div>
-      )}
     </>
   )
 }

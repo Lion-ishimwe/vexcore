@@ -24,6 +24,17 @@ export const DEFAULT_SETTINGS = {
   emailPhaseDone: true,
   emailDailyReport: true,
   emailLowStock: true,
+  // Senior Engineers may suspend/activate/delete team members when the admin
+  // grants it (admins always can).
+  seniorTeamManage: false,
+  // Attendance access per role - the admin grants it individually (admins
+  // always have it). Off = the role loses the Attendance page and endpoints.
+  attSenior: true,
+  attSite: true,
+  attStock: true,
+  // Projects access for Stock Managers - granted individually by the admin
+  // (view-only: their assigned projects and phase boards, no editing).
+  projStock: false,
   // Attendance time windows: when enabled, clock-ins/outs are only accepted
   // inside these ranges (late arrivals are not recorded).
   attWindows: false,
@@ -35,17 +46,18 @@ export const DEFAULT_SETTINGS = {
 
 const ROLE_CAPS = {
   SUPER: ['*'],
+  // Audit trail is platform-level: only the SUPER admin can see it.
   CLIENT: ['dashboard', 'projects.view', 'projects.create', 'phases.view', 'schedule.view', 'updates.view',
     'stock.amounts', 'damaged.view', 'chat', 'reports', 'settings.edit', 'team.view',
-    'team.create', 'billing', 'audit.view', 'docs.view', 'docs.upload', 'docs.admin',
+    'team.create', 'team.manage', 'billing', 'docs.view', 'docs.upload', 'docs.admin',
     'attendance.view', 'attendance.session'],
   SENIOR: ['dashboard', 'projects.view', 'phases.view', 'schedule.view', 'phases.edit', 'updates.view',
     'updates.submit', 'updates.forward', 'stock.view', 'stock.amounts', 'stock.edit',
-    'stock.approve', 'damaged.view', 'chat', 'reports', 'team.view', 'team.create', 'audit.view',
+    'stock.approve', 'stock.issue', 'damaged.view', 'chat', 'reports', 'team.view', 'team.create',
     'docs.view', 'docs.upload', 'attendance.view', 'attendance.record', 'attendance.session', 'workers.manage'],
   SITE: ['dashboard', 'projects.view', 'phases.view', 'schedule.view', 'updates.view', 'updates.submit', 'chat',
     'docs.view', 'docs.upload', 'attendance.view', 'attendance.record', 'workers.manage'],
-  STOCK: ['dashboard', 'stock.view', 'stock.request', 'chat', 'docs.view', 'docs.upload',
+  STOCK: ['dashboard', 'stock.view', 'stock.request', 'stock.issue', 'chat', 'docs.view', 'docs.upload',
     'attendance.view', 'attendance.record'],
   GUEST: ['dashboard', 'projects.view', 'phases.view', 'schedule.view', 'updates.view', 'docs.view'],
 }
@@ -64,6 +76,15 @@ export function capsFor(user, client) {
   const s = settingsOf(client)
   if (user.role === 'SITE' && s.stockVisibleToSite) caps.add('stock.view')
   if (user.role === 'STOCK' && s.stockMgrEdit) caps.add('stock.edit')
+  if (user.role === 'STOCK' && s.projStock) { caps.add('projects.view'); caps.add('phases.view') }
+  if (user.role === 'SENIOR' && s.seniorTeamManage) caps.add('team.manage')
+  // Attendance is granted per role by the admin (admins always keep it).
+  // For Stock Managers the grant is FULL access: sessions (open/close),
+  // recording/scanning, enrolling workers and generating cards.
+  const attOff = { SENIOR: !s.attSenior, SITE: !s.attSite, STOCK: !s.attStock }
+  if (attOff[user.role])
+    for (const c of ['attendance.view', 'attendance.record', 'attendance.session']) caps.delete(c)
+  if (user.role === 'STOCK' && s.attStock) { caps.add('attendance.session'); caps.add('workers.manage') }
   if (s.mediaDownload) caps.add('media.download')
   // Guest areas are opt-in/out individually (Settings → Guest access).
   if (user.role === 'GUEST') {
@@ -133,6 +154,8 @@ export async function authRequired(req, res, next) {
   }
   if (user.role !== 'SUPER') {
     if (!user.client) return res.status(403).json({ error: 'No client account' })
+    if (user.suspended)
+      return res.status(403).json({ error: 'Your account was suspended by your admin' })
     if (['SUSPENDED', 'TERMINATED'].includes(user.client.status))
       return res.status(403).json({ error: `Account ${user.client.status.toLowerCase()} - contact support` })
     // Account-wide 2FA enforcement: existing sessions of users who haven't set

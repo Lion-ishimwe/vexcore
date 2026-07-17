@@ -394,7 +394,7 @@ r.get('/reports', requireCap('reports'), async (req, res) => {
   })
   const projIds = projects.map(p => p.id)
 
-  const [phases, sessions, totalWorkers, stockItems, damagedCount, pendingRequests, auditRows, looseRange] = await Promise.all([
+  const [phases, sessions, totalWorkers, stockItems, damagedCount, pendingRequests, looseRange] = await Promise.all([
     db.phase.findMany({
       where: { projectId: { in: projIds }, ...(phFilter ? { id: phFilter } : {}) },
       include: {
@@ -418,10 +418,6 @@ r.get('/reports', requireCap('reports'), async (req, res) => {
     db.stockItem.findMany({ where: { clientId: cid, ...projectScopeWhere(ids) } }),
     db.damagedItem.count({ where: { clientId: cid, createdAt: { gte: from, lte: to } } }),
     db.stockRequest.count({ where: { clientId: cid, status: 'PENDING' } }),
-    db.auditLog.findMany({
-      where: { clientId: cid, createdAt: { gte: from, lte: to } },
-      orderBy: { createdAt: 'desc' }, take: 150,
-    }),
     // Items consumed by phase-less daily reports (they carry no phase relation)
     phFilter ? [] : db.updateMaterial.findMany({
       where: { createdAt: { gte: from, lte: to }, update: { clientId: cid, phaseId: null, projectId: { in: projIds } } },
@@ -438,7 +434,7 @@ r.get('/reports', requireCap('reports'), async (req, res) => {
   for (const s of sessions) {
     const day = dayKey(s.date)
     for (const rec of s.records) {
-      if (!rec.clockInAt) continue
+      if (!rec.worker || !rec.clockInAt) continue // team-member badges earn no wages
       const key = `${s.projectId}|${rec.workerId}|${day}`
       if (seen.has(key)) continue
       seen.add(key)
@@ -606,7 +602,6 @@ r.get('/reports', requireCap('reports'), async (req, res) => {
       damaged: damagedCount,
       pendingRequests,
     },
-    audit: auditRows.map(a => ({ userName: a.userName, action: a.action, detail: a.detail, createdAt: a.createdAt })),
   })
 })
 
@@ -758,6 +753,25 @@ r.patch('/admin/demos/:id', superOnly, async (req, res) => {
   if (req.body.note !== undefined) data.note = String(req.body.note).trim() || null
   const updated = await db.demoBooking.update({ where: { id: booking.id }, data })
   res.json({ ok: true, status: updated.status, heldAt: updated.heldAt, duration: updated.duration, note: updated.note })
+})
+
+// ---- Platform audit trail: everything that happened, across ALL companies.
+// Audit is Super-Admin-only - client roles have no audit capability.
+r.get('/admin/audit', superOnly, async (req, res) => {
+  const where = {}
+  if (+req.query.clientId) where.clientId = +req.query.clientId
+  if (req.query.from) where.createdAt = { ...(where.createdAt ?? {}), gte: new Date(req.query.from + 'T00:00:00') }
+  if (req.query.to) where.createdAt = { ...(where.createdAt ?? {}), lte: new Date(req.query.to + 'T23:59:59.999') }
+  const rows = await db.auditLog.findMany({
+    where,
+    include: { client: { select: { id: true, company: true } } },
+    orderBy: { createdAt: 'desc' },
+    take: 300,
+  })
+  res.json(rows.map(a => ({
+    id: a.id, company: a.client.company, clientId: a.clientId,
+    userName: a.userName, action: a.action, detail: a.detail, createdAt: a.createdAt,
+  })))
 })
 
 r.get('/admin/settings', superOnly, async (_req, res) => {

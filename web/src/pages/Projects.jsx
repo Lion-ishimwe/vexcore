@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { MapPin, Paperclip, Users } from 'lucide-react'
+import { MapPin, Paperclip, Users, Pencil, Trash2 } from 'lucide-react'
 import { api, fmtMoney } from '../api.js'
 import { useAuth } from '../auth.jsx'
 import { Modal, Field, ErrorNote, useForm } from '../ui.jsx'
@@ -12,7 +12,8 @@ export default function Projects() {
   const [projects, setProjects] = useState(null)
   const [error, setError] = useState(null)
   const [creating, setCreating] = useState(false)
-  const [v, set, setAll] = useForm({ name: '', location: '', budget: '' })
+  const [editing, setEditing] = useState(null) // project being edited
+  const [v, set, setAll] = useForm({ name: '', location: '', budget: '', status: 'Planning' })
   const [formError, setFormError] = useState(null)
   // per-project team assignment
   const [teamFor, setTeamFor] = useState(null) // project being edited
@@ -24,14 +25,34 @@ export default function Projects() {
   const load = () => api('/projects').then(setProjects).catch((e) => setError(e.message))
   useEffect(() => { load() }, [])
 
-  const create = async (e) => {
+  const emptyForm = { name: '', location: '', budget: '', status: 'Planning' }
+
+  const save = async (e) => {
     e.preventDefault()
     setFormError(null)
     try {
-      await api('/projects', { method: 'POST', body: v })
-      setCreating(false); setAll({ name: '', location: '', budget: '' })
+      if (editing) await api(`/projects/${editing.id}`, { method: 'PATCH', body: v })
+      else await api('/projects', { method: 'POST', body: v })
+      setCreating(false); setEditing(null); setAll(emptyForm)
       load()
     } catch (err) { setFormError(err.message) }
+  }
+
+  const openEdit = (p) => {
+    setFormError(null)
+    setAll({ name: p.name, location: p.location ?? '', budget: p.budget || '', status: p.status })
+    setEditing(p)
+  }
+
+  const deleteProject = async (p) => {
+    const sure = window.confirm(
+      `Delete project "${p.name}"? This permanently removes its phases, daily reports, attendance and team assignments.\n\n` +
+      'Workers and stock items assigned to it are kept - they move back to "all projects" / the general store.\n\nThis cannot be undone.'
+    )
+    if (!sure) return
+    setError(null)
+    try { await api(`/projects/${p.id}`, { method: 'DELETE' }); load() }
+    catch (err) { setError(err.message) }
   }
 
   const openTeam = async (p) => {
@@ -73,7 +94,13 @@ export default function Projects() {
           <div className="card" key={p.id}>
             <div className="flex-between">
               <b style={{ fontSize: 15 }}>{p.name}</b>
-              <span className={`badge ${statusBadge[p.status] ?? 'gray'}`}>{p.status}</span>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexShrink: 0 }}>
+                <span className={`badge ${statusBadge[p.status] ?? 'gray'}`}>{p.status}</span>
+                {can('projects.create') && <>
+                  <Pencil size={13} className="kaction" title="Edit project" onClick={() => openEdit(p)} />
+                  <Trash2 size={13} className="kaction danger" title="Delete project" onClick={() => deleteProject(p)} />
+                </>}
+              </div>
             </div>
             <div className="sub"><MapPin size={12} /> {p.location ?? '-'}</div>
             <div className="bar mt"><span style={{ width: `${p.percent}%` }} /></div>
@@ -113,14 +140,24 @@ export default function Projects() {
         {!projects.length && <div className="muted">No projects yet - create your first one.</div>}
       </div>
 
-      {creating && (
-        <Modal title="New Project" onClose={() => setCreating(false)}>
+      {(creating || editing) && (
+        <Modal title={editing ? `Edit project - ${editing.name}` : 'New Project'}
+          onClose={() => { setCreating(false); setEditing(null); setAll(emptyForm) }}>
           <ErrorNote error={formError} />
-          <form onSubmit={create}>
+          <form onSubmit={save}>
             <Field label="Project name *"><input value={v.name} onChange={set('name')} required autoFocus /></Field>
             <Field label="Location"><input value={v.location} onChange={set('location')} placeholder="City / site" /></Field>
             <Field label={`Budget (${cur})`}><input type="number" min="0" value={v.budget} onChange={set('budget')} /></Field>
-            <button className="btn" style={{ width: '100%', justifyContent: 'center' }}>Create project</button>
+            {editing && (
+              <Field label="Status">
+                <select value={v.status} onChange={set('status')}>
+                  {['Planning', 'In progress', 'Done'].map((s) => <option key={s}>{s}</option>)}
+                </select>
+              </Field>
+            )}
+            <button className="btn" style={{ width: '100%', justifyContent: 'center' }}>
+              {editing ? 'Save changes' : 'Create project'}
+            </button>
           </form>
         </Modal>
       )}
@@ -130,7 +167,7 @@ export default function Projects() {
           <ErrorNote error={teamErr} />
           <p className="small muted" style={{ marginBottom: 12 }}>
             Pick who works on this project. Assigned members see only their projects'
-            phases, stock, workers and attendance. Members on no project see everything.
+            phases, stock, workers and attendance. Members on no project see no projects at all.
           </p>
           {!staff ? <div className="spin">Loading team…</div> : (
             <form onSubmit={saveTeam}>

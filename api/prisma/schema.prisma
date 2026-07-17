@@ -35,6 +35,8 @@ model Client {
   attendanceSessions AttendanceSession[]
   cardIssues CardIssue[]
   payments  Payment[]
+  stockIssues StockIssue[]
+  stockStores StockStore[]
 }
 
 // Manual MoMo subscription payments: the client creates a payment intent at
@@ -73,6 +75,8 @@ model User {
   role         String   // SUPER | CLIENT | SENIOR | SITE | STOCK | GUEST
   language     String   @default("en") // en | fr | rw
   photo        String?  // optional profile photo (uploads/ filename); initials otherwise
+  cardId       String?  @unique // QR badge id, auto-generated at creation - attendance + stock issues
+  suspended    Boolean  @default(false) // suspended members cannot log in or act
   totpSecret   String?
   totpEnabled  Boolean  @default(false)
   backupCodes  Json? // sha256 hashes of unused one-time backup codes
@@ -85,6 +89,10 @@ model User {
   phases       Phase[]  @relation("assignee")
   documents    Document[]
   memberships  ProjectMember[]
+  stockIssued   StockIssue[] @relation("stockIssuer")
+  stockReceived StockIssue[] @relation("stockReceiver")
+  cardIssues    CardIssue[]
+  attendance    AttendanceRecord[]
 
   @@index([clientId])
 }
@@ -117,6 +125,7 @@ model Project {
   stockRequests StockRequest[]
   damaged   DamagedItem[]
   workers   Worker[]
+  stores    StockStore[]
 
   @@index([clientId])
 }
@@ -242,12 +251,31 @@ model Media {
   path     String
 }
 
+// A big project can run several stores (e.g. "Block A store", "Main yard") -
+// each store belongs to one project and holds its own stock items.
+model StockStore {
+  id        Int      @id @default(autoincrement())
+  clientId  Int
+  client    Client   @relation(fields: [clientId], references: [id])
+  projectId Int
+  project   Project  @relation(fields: [projectId], references: [id])
+  name      String
+  createdAt DateTime @default(now())
+
+  items     StockItem[]
+
+  @@unique([projectId, name])
+  @@index([clientId])
+}
+
 model StockItem {
   id           Int      @id @default(autoincrement())
   clientId     Int
   client       Client   @relation(fields: [clientId], references: [id])
   projectId    Int?     // null = general store (visible to everyone with stock caps)
   project      Project? @relation(fields: [projectId], references: [id])
+  storeId      Int?     // which of the project's stores holds it (null = project-wide)
+  store        StockStore? @relation(fields: [storeId], references: [id])
   name         String
   category     String   @default("Consumable") // Consumable | Machine
   qty          Int      @default(0)
@@ -259,9 +287,47 @@ model StockItem {
 
   materials    PhaseMaterial[]
   usedInUpdates UpdateMaterial[]
+  issueItems   StockIssueItem[]
 
   @@index([clientId])
   @@index([projectId])
+}
+
+// Proof of how stock was consumed: the Stock Manager (or Senior/Admin) hands
+// items to a person - a worker (identified by scanning their card, or picked
+// manually) or a team member - and the hand-out is recorded with quantities.
+// Stock is deducted at issue time.
+model StockIssue {
+  id         Int      @id @default(autoincrement())
+  clientId   Int
+  client     Client   @relation(fields: [clientId], references: [id])
+  issuedById Int
+  issuedBy   User     @relation("stockIssuer", fields: [issuedById], references: [id])
+  workerId   Int?     // recipient: a worker...
+  worker     Worker?  @relation(fields: [workerId], references: [id])
+  userId     Int?     // ...or a team member
+  user       User?    @relation("stockReceiver", fields: [userId], references: [id])
+  viaCard    Boolean  @default(false) // true when the recipient was identified by card scan
+  note       String?
+  createdAt  DateTime @default(now())
+
+  items      StockIssueItem[]
+
+  @@index([clientId])
+}
+
+model StockIssueItem {
+  id           Int        @id @default(autoincrement())
+  issueId      Int
+  issue        StockIssue @relation(fields: [issueId], references: [id])
+  stockItemId  Int
+  stockItem    StockItem  @relation(fields: [stockItemId], references: [id])
+  nameSnap     String
+  unitSnap     String     @default("pcs")
+  qty          Int
+  unitCostSnap Int
+
+  @@index([issueId])
 }
 
 model StockRequest {
@@ -380,6 +446,7 @@ model Worker {
 
   records   AttendanceRecord[]
   issues    CardIssue[]
+  stockIssues StockIssue[]
 
   @@unique([clientId, cardId])
   @@index([clientId])
@@ -389,8 +456,10 @@ model CardIssue {
   id        Int      @id @default(autoincrement())
   clientId  Int
   client    Client   @relation(fields: [clientId], references: [id])
-  workerId  Int
-  worker    Worker   @relation(fields: [workerId], references: [id])
+  workerId  Int?     // card generated for a worker...
+  worker    Worker?  @relation(fields: [workerId], references: [id])
+  userId    Int?     // ...or a team member
+  user      User?    @relation(fields: [userId], references: [id])
   cardId    String
   issuedBy  String
   createdAt DateTime @default(now())
@@ -424,8 +493,10 @@ model AttendanceRecord {
   id         Int               @id @default(autoincrement())
   sessionId  Int
   session    AttendanceSession @relation(fields: [sessionId], references: [id])
-  workerId   Int
-  worker     Worker            @relation(fields: [workerId], references: [id])
+  workerId   Int?    // a worker tapping in...
+  worker     Worker? @relation(fields: [workerId], references: [id])
+  userId     Int?    // ...or a team member (staff attendance - no wage)
+  user       User?   @relation(fields: [userId], references: [id])
   clockInAt  DateTime?
   clockOutAt DateTime?
   inMethod   String? // auto | manual
@@ -435,6 +506,7 @@ model AttendanceRecord {
   rateSnap   Int? // worker's daily rate captured at clock-in - the amount actually owed for this day
 
   @@unique([sessionId, workerId])
+  @@unique([sessionId, userId])
   @@index([sessionId])
 }
 

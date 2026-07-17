@@ -1,8 +1,9 @@
 import { useEffect, useRef, useState } from 'react'
-import { Lock, FileSpreadsheet, Upload, CheckCircle2 } from 'lucide-react'
+import { Lock, FileSpreadsheet, Upload, CheckCircle2, CreditCard, PackageCheck, X, Camera, CameraOff, Warehouse, Pencil, Trash2 } from 'lucide-react'
 import { api, fmtMoney, fmtDate } from '../api.js'
 import { useAuth } from '../auth.jsx'
-import { Modal, Field, ErrorNote, useForm } from '../ui.jsx'
+import { Modal, Field, ErrorNote, Avatar, useForm } from '../ui.jsx'
+import QrScanner from '../QrScanner.jsx'
 
 export default function Stock() {
   const { user, client, can } = useAuth()
@@ -11,16 +12,30 @@ export default function Stock() {
   const [damaged, setDamaged] = useState([])
   const [error, setError] = useState(null)
   const [modal, setModal] = useState(null) // 'insert' | 'request' | 'bulk'
-  const [iv, iset, isetAll] = useForm({ name: '', category: 'Consumable', qty: '', unit: 'pcs', unitCost: '', serial: '', lowThreshold: '', projectId: '' })
+  const [iv, iset, isetAll] = useForm({ name: '', category: 'Consumable', qty: '', unit: 'pcs', unitCost: '', serial: '', lowThreshold: '', projectId: '', storeId: '' })
   const [rv, rset, rsetAll] = useForm({ itemName: '', qty: '', note: '', projectId: '' })
   const [formError, setFormError] = useState(null)
   const [projects, setProjects] = useState([])
   const [projF, setProjF] = useState('') // '' all | 'general' | project id
+  // stores: a big project can run several stock stores
+  const [stores, setStores] = useState([])
+  const [storeF, setStoreF] = useState('') // '' all | 'none' unassigned | store id
+  const [storeForm, setStoreForm] = useState({ projectId: '', name: '' })
   // bulk upload
   const bulkRef = useRef(null)
   const [bulkProjId, setBulkProjId] = useState('')
+  const [bulkStoreId, setBulkStoreId] = useState('')
   const [bulkResult, setBulkResult] = useState(null)
   const [bulkBusy, setBulkBusy] = useState(false)
+  // stock issues (proof of consumption): who received what - card-only
+  const [issues, setIssues] = useState([])
+  const [card, setCard] = useState('')
+  const [recipient, setRecipient] = useState(null) // { kind, name, sub, photo } from the card lookup
+  const [issueItems, setIssueItems] = useState([]) // { stockItemId, name, unit, qty }
+  const [issueDraft, setIssueDraft] = useState({ stockItemId: '', qty: '' })
+  const [issueNote, setIssueNote] = useState('')
+  const [issueBusy, setIssueBusy] = useState(false)
+  const [scanCam, setScanCam] = useState(false) // camera QR scanning in the issue modal
 
   const showMoney = can('stock.amounts')
   const canEdit = can('stock.edit')
@@ -31,20 +46,58 @@ export default function Stock() {
 
   const load = () => {
     api('/stock').then(setItems).catch((e) => setError(e.message))
+    api('/stock/stores').then(setStores).catch(() => {})
     api('/stock/requests').then(setRequests).catch(() => {})
+    api('/stock/issues').then(setIssues).catch(() => {})
     if (can('damaged.view')) api('/stock/damaged').then(setDamaged).catch(() => {})
     api('/projects').then((ps) => setProjects(ps.map((p) => ({ id: p.id, name: p.name })))).catch(() => {})
   }
   useEffect(() => { load() }, [])
 
+  // Live card lookup: as the id is scanned/typed, resolve who it belongs to
+  // (worker or team member) - debounced against the server.
+  useEffect(() => {
+    setRecipient(null)
+    const id = card.trim()
+    if (!id) return
+    const t = setTimeout(() => {
+      api(`/stock/card/${encodeURIComponent(id)}`)
+        .then(setRecipient)
+        .catch(() => setRecipient(null))
+    }, 250)
+    return () => clearTimeout(t)
+  }, [card])
+
   const insert = async (e) => {
     e.preventDefault(); setFormError(null)
     try {
       await api('/stock', { method: 'POST', body: iv })
-      setModal(null); isetAll({ name: '', category: 'Consumable', qty: '', unit: 'pcs', unitCost: '', serial: '', lowThreshold: '', projectId: '' })
+      setModal(null); isetAll({ name: '', category: 'Consumable', qty: '', unit: 'pcs', unitCost: '', serial: '', lowThreshold: '', projectId: '', storeId: '' })
       load()
     } catch (err) { setFormError(err.message) }
   }
+
+  // ---- Stores ----
+  const addStore = async (e) => {
+    e.preventDefault(); setFormError(null)
+    try {
+      await api('/stock/stores', { method: 'POST', body: storeForm })
+      setStoreForm({ projectId: storeForm.projectId, name: '' })
+      load()
+    } catch (err) { setFormError(err.message) }
+  }
+  const renameStore = async (s) => {
+    const name = window.prompt(`Rename store "${s.name}" to:`, s.name)
+    if (!name || name.trim() === s.name) return
+    try { await api(`/stock/stores/${s.id}`, { method: 'PATCH', body: { name: name.trim() } }); load() }
+    catch (err) { setFormError(err.message) }
+  }
+  const deleteStore = async (s) => {
+    if (!window.confirm(`Delete store "${s.name}"?${s.items ? ` Its ${s.items} item${s.items === 1 ? '' : 's'} will move to the project's unassigned stock.` : ''}`)) return
+    try { await api(`/stock/stores/${s.id}`, { method: 'DELETE' }); if (storeF === String(s.id)) setStoreF(''); load() }
+    catch (err) { setFormError(err.message) }
+  }
+  const storesOf = (projectId) => stores.filter((s) => s.projectId === +projectId)
 
   const request = async (e) => {
     e.preventDefault(); setFormError(null)
@@ -110,16 +163,61 @@ export default function Stock() {
           lowThreshold: pick('lowthreshold'),
         }
       })
-      const r = await api('/stock/bulk', { method: 'POST', body: { items: rows, projectId: bulkProjId || undefined } })
+      const r = await api('/stock/bulk', { method: 'POST', body: { items: rows, projectId: bulkProjId || undefined, storeId: bulkStoreId || undefined } })
       setBulkResult(r)
       load()
     } catch (err) { setFormError(err.message) } finally { setBulkBusy(false) }
   }
 
+  // ---- Issue items: proof of who received what (card-only) ----
+  const openIssue = () => {
+    setFormError(null)
+    setCard(''); setRecipient(null)
+    setIssueItems([]); setIssueDraft({ stockItemId: '', qty: '' }); setIssueNote('')
+    setScanCam(false)
+    setModal('issue')
+  }
+
+  // Camera scan found a code → treat it exactly like a typed card id, and
+  // stop the camera once it resolves to a person.
+  const onCameraScan = (code) => setCard(code)
+  useEffect(() => { if (recipient && scanCam) setScanCam(false) }, [recipient, scanCam])
+
+  const addIssueItem = () => {
+    const s = (items ?? []).find((x) => x.id === +issueDraft.stockItemId)
+    const qty = Number(issueDraft.qty)
+    if (!s || !qty || qty <= 0) return
+    if (qty > s.qty) { setFormError(`Only ${s.qty} ${s.unit} of ${s.name} in stock`); return }
+    setFormError(null)
+    setIssueItems((list) => [...list, { stockItemId: s.id, name: s.name, unit: s.unit, qty }])
+    setIssueDraft({ stockItemId: '', qty: '' })
+  }
+
+  const submitIssue = async (e) => {
+    e.preventDefault()
+    setFormError(null)
+    if (!recipient) return setFormError("Scan the card's QR code or type the card id first")
+    if (!issueItems.length) return setFormError('Add at least one item')
+    setIssueBusy(true)
+    try {
+      await api('/stock/issues', {
+        method: 'POST',
+        body: {
+          cardId: card.trim(),
+          items: issueItems.map((i) => ({ stockItemId: i.stockItemId, qty: i.qty })),
+          note: issueNote,
+        },
+      })
+      setModal(null)
+      load()
+    } catch (err) { setFormError(err.message) } finally { setIssueBusy(false) }
+  }
+
   if (error) return <div className="error-note">{error}</div>
   if (!items) return <div className="spin">Loading stock…</div>
   const visible = items.filter((i) =>
-    !projF || (projF === 'general' ? i.projectId == null : i.projectId === +projF))
+    (!projF || (projF === 'general' ? i.projectId == null : i.projectId === +projF)) &&
+    (!storeF || (storeF === 'none' ? i.storeId == null : i.storeId === +storeF)))
   const totalValue = showMoney ? visible.reduce((s, i) => s + (i.total ?? 0), 0) : null
   const lowCount = visible.filter((i) => i.low).length
   const projName = (id) => projects.find((p) => p.id === id)?.name
@@ -131,6 +229,9 @@ export default function Stock() {
           Consumables and machines/tools. {isStockMgr && 'Monetary amounts and damaged items are hidden for your role.'}
         </p>
         <div style={{ display: 'flex', gap: 8 }}>
+          {can('stock.issue') && (
+            <button className="btn" onClick={openIssue}><PackageCheck size={14} /> Issue items</button>
+          )}
           {canRequest && !canEdit && <button className="btn" onClick={() => setModal('request')}>+ Request Item</button>}
           {canEdit && <>
             <button className="btn ghost sm" onClick={() => setModal('request')}>+ Request</button>
@@ -162,18 +263,32 @@ export default function Stock() {
 
       <div className="section-title" style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
         Inventory
-        <select value={projF} onChange={(e) => setProjF(e.target.value)}
+        <select value={projF} onChange={(e) => { setProjF(e.target.value); setStoreF('') }}
           style={{ padding: '6px 10px', borderRadius: 8, border: '1px solid var(--border)', fontSize: 12.5, fontWeight: 400 }}>
           <option value="">All projects</option>
           <option value="general">General store</option>
           {projects.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
         </select>
+        {projF && projF !== 'general' && storesOf(projF).length > 0 && (
+          <select value={storeF} onChange={(e) => setStoreF(e.target.value)}
+            style={{ padding: '6px 10px', borderRadius: 8, border: '1px solid var(--border)', fontSize: 12.5, fontWeight: 400 }}>
+            <option value="">All stores</option>
+            <option value="none">Unassigned</option>
+            {storesOf(projF).map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
+          </select>
+        )}
+        <div style={{ flex: 1 }} />
+        {canEdit && (
+          <button className="btn ghost sm" onClick={() => { setFormError(null); setModal('stores') }}>
+            <Warehouse size={13} /> Stores{stores.length ? ` (${stores.length})` : ''}
+          </button>
+        )}
       </div>
       <div className="card table-card">
         <table>
           <thead>
             <tr>
-              <th>Product</th><th>Project</th><th>Category</th><th>Serial</th><th>Quantity</th>
+              <th>Product</th><th>Project</th><th>Store</th><th>Category</th><th>Serial</th><th>Quantity</th>
               {showMoney && <th>Unit amount</th>}
               {showMoney && <th>Total</th>}
               <th>Status</th>
@@ -184,6 +299,7 @@ export default function Stock() {
               <tr key={s.id}>
                 <td><b>{s.name}</b></td>
                 <td className="muted">{s.projectName ?? 'General'}</td>
+                <td className="muted">{s.storeName ?? '-'}</td>
                 <td><span className={`badge ${s.category === 'Machine' ? 'blue' : 'gray'}`}>{s.category}</span></td>
                 <td className="muted">{s.serial ?? '-'}</td>
                 <td>{s.qty.toLocaleString()} {s.unit}</td>
@@ -192,7 +308,7 @@ export default function Stock() {
                 <td>{s.low ? <span className="badge red">Low stock</span> : <span className="badge green">OK</span>}</td>
               </tr>
             ))}
-            {!visible.length && <tr><td colSpan="8" className="muted">No stock{projF ? ' for this project' : ' yet'}.</td></tr>}
+            {!visible.length && <tr><td colSpan="9" className="muted">No stock{projF ? ' for this selection' : ' yet'}.</td></tr>}
           </tbody>
         </table>
       </div>
@@ -257,17 +373,122 @@ export default function Stock() {
         </div>
       </div>
 
+      <div className="section-title" style={{ marginTop: 16 }}>Issued items - proof of consumption</div>
+      <div className="card table-card">
+        <table>
+          <thead>
+            <tr><th>When</th><th>Given to</th><th>Items</th>{showMoney && <th>Value</th>}<th>Issued by</th><th>Proof</th></tr>
+          </thead>
+          <tbody>
+            {issues.map((i) => (
+              <tr key={i.id}>
+                <td className="muted" style={{ whiteSpace: 'nowrap' }}>{fmtDate(i.createdAt)}</td>
+                <td>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 9 }}>
+                    <Avatar name={i.recipient.name} photo={i.recipient.photo} />
+                    <div><b>{i.recipient.name}</b><div className="small muted">{i.recipient.kind === 'worker' ? i.recipient.sub : (i.recipient.sub || 'team member').toLowerCase()}</div></div>
+                  </div>
+                </td>
+                <td className="small">
+                  {i.items.map((it, x) => <div key={x}>{it.qty.toLocaleString()} {it.unit} × {it.name}</div>)}
+                  {i.note && <div className="muted">“{i.note}”</div>}
+                </td>
+                {showMoney && <td>{fmtMoney(i.total, cur)}</td>}
+                <td className="muted">{i.issuedBy}</td>
+                <td>
+                  {i.viaCard
+                    ? <span className="badge blue"><CreditCard size={10} /> card scan</span>
+                    : <span className="badge gray">manual pick</span>}
+                </td>
+              </tr>
+            ))}
+            {!issues.length && <tr><td colSpan={showMoney ? 6 : 5} className="muted">Nothing issued yet - use “Issue items” to record who received materials.</td></tr>}
+          </tbody>
+        </table>
+      </div>
+
+      {modal === 'issue' && (
+        <Modal title="Issue items - who receives them?" onClose={() => setModal(null)}>
+          <ErrorNote error={formError} />
+          <form onSubmit={submitIssue}>
+            <Field label="Scan the card's QR code with the camera, or type the card id">
+              <div style={{ display: 'flex', gap: 8 }}>
+                <input value={card} autoFocus placeholder="e.g. C1-ABC234" style={{ flex: 1 }}
+                  onChange={(e) => setCard(e.target.value)} />
+                <button type="button" className={`btn ${scanCam ? '' : 'ghost'}`} title={scanCam ? 'Stop camera' : 'Scan QR with camera'}
+                  onClick={() => setScanCam((s) => !s)}>
+                  {scanCam ? <CameraOff size={15} /> : <Camera size={15} />}
+                </button>
+              </div>
+              {scanCam && (
+                <div style={{ marginTop: 10 }}>
+                  <QrScanner onScan={onCameraScan} />
+                  <div className="small muted" style={{ marginTop: 6 }}>Point the camera at the QR code on the card - workers and team members both have one.</div>
+                </div>
+              )}
+            </Field>
+            {card.trim() && !recipient && (
+              <div className="error-note">Card not recognised yet - keep scanning or check the id.</div>
+            )}
+            {recipient && (
+              <div className="ok-note" style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                <CheckCircle2 size={14} /> Receiving: <b>{recipient.name}</b>
+                <span className="muted small">({recipient.kind === 'worker' ? recipient.sub : recipient.sub.toLowerCase()})</span>
+                <span className="badge blue"><CreditCard size={10} /> card</span>
+              </div>
+            )}
+
+            <Field label="Items to issue (deducted from stock)">
+              <div className="item-add">
+                <select value={issueDraft.stockItemId}
+                  onChange={(e) => setIssueDraft((d) => ({ ...d, stockItemId: e.target.value }))}>
+                  <option value="">- Select item -</option>
+                  {items.filter((s) => s.qty > 0 && !issueItems.some((x) => x.stockItemId === s.id)).map((s) => (
+                    <option key={s.id} value={s.id}>{s.name} · {s.qty.toLocaleString()} {s.unit} left{s.projectId == null ? ' (general store)' : s.storeName ? ` (${s.storeName})` : ''}</option>
+                  ))}
+                </select>
+                <input type="number" min="1" placeholder="Qty" value={issueDraft.qty}
+                  onChange={(e) => setIssueDraft((d) => ({ ...d, qty: e.target.value }))} style={{ width: 84 }} />
+                <button type="button" className="btn ghost sm" onClick={addIssueItem}>Add</button>
+              </div>
+              {issueItems.map((i, idx) => (
+                <div className="cost-line" key={i.stockItemId}>
+                  <span>{i.qty.toLocaleString()} {i.unit} × {i.name}</span>
+                  <X size={13} style={{ cursor: 'pointer' }} title="Remove"
+                    onClick={() => setIssueItems((l) => l.filter((_, j) => j !== idx))} />
+                </div>
+              ))}
+            </Field>
+            <Field label="Note (optional)">
+              <input value={issueNote} onChange={(e) => setIssueNote(e.target.value)}
+                placeholder="e.g. for block A column casting" />
+            </Field>
+            <button className="btn" style={{ width: '100%', justifyContent: 'center' }} disabled={issueBusy}>
+              {issueBusy ? 'Recording…' : 'Record issue'}
+            </button>
+          </form>
+        </Modal>
+      )}
+
       {modal === 'insert' && (
         <Modal title="Insert stock" onClose={() => setModal(null)}>
           <ErrorNote error={formError} />
           <form onSubmit={insert}>
             <Field label="Product name *"><input value={iv.name} onChange={iset('name')} required autoFocus /></Field>
             <Field label="Project">
-              <select value={iv.projectId} onChange={iset('projectId')}>
+              <select value={iv.projectId} onChange={(e) => { iset('projectId')(e); iset('storeId')({ target: { value: '' } }) }}>
                 <option value="">General store (all projects)</option>
                 {projects.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
               </select>
             </Field>
+            {iv.projectId && storesOf(iv.projectId).length > 0 && (
+              <Field label="Store (this project runs several)">
+                <select value={iv.storeId} onChange={iset('storeId')}>
+                  <option value="">Unassigned (project-wide)</option>
+                  {storesOf(iv.projectId).map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
+                </select>
+              </Field>
+            )}
             <div className="grid grid-2" style={{ gap: 0, columnGap: 12 }}>
               <Field label="Category">
                 <select value={iv.category} onChange={iset('category')}>
@@ -316,11 +537,19 @@ export default function Stock() {
                 then upload it back.
               </p>
               <Field label="Insert into">
-                <select value={bulkProjId} onChange={(e) => setBulkProjId(e.target.value)}>
+                <select value={bulkProjId} onChange={(e) => { setBulkProjId(e.target.value); setBulkStoreId('') }}>
                   <option value="">General store (all projects)</option>
                   {projects.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
                 </select>
               </Field>
+              {bulkProjId && storesOf(bulkProjId).length > 0 && (
+                <Field label="Store">
+                  <select value={bulkStoreId} onChange={(e) => setBulkStoreId(e.target.value)}>
+                    <option value="">Unassigned (project-wide)</option>
+                    {storesOf(bulkProjId).map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
+                  </select>
+                </Field>
+              )}
               <input type="file" accept=".csv,text/csv" hidden ref={bulkRef}
                 onChange={(e) => { if (e.target.files[0]) bulkUpload(e.target.files[0]); e.target.value = '' }} />
               <div style={{ display: 'flex', gap: 8 }}>
@@ -334,6 +563,49 @@ export default function Stock() {
               </div>
             </>
           )}
+        </Modal>
+      )}
+
+      {modal === 'stores' && (
+        <Modal title="Stock stores" onClose={() => setModal(null)}>
+          <ErrorNote error={formError} />
+          <p className="small muted" style={{ marginBottom: 10 }}>
+            A big project can run more than one store (e.g. <i>Main yard</i>, <i>Block B store</i>).
+            Stock items can then be placed in a specific store of the project.
+          </p>
+          <form onSubmit={addStore}>
+            <div className="item-add">
+              <select value={storeForm.projectId} required
+                onChange={(e) => setStoreForm((s) => ({ ...s, projectId: e.target.value }))}>
+                <option value="">- Project -</option>
+                {projects.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
+              </select>
+              <input value={storeForm.name} required placeholder="Store name"
+                onChange={(e) => setStoreForm((s) => ({ ...s, name: e.target.value }))} />
+              <button className="btn sm"><Warehouse size={13} /> Add store</button>
+            </div>
+          </form>
+          <div className="card table-card" style={{ marginTop: 12 }}>
+            <table>
+              <thead><tr><th>Store</th><th>Project</th><th>Items</th><th></th></tr></thead>
+              <tbody>
+                {stores.map((s) => (
+                  <tr key={s.id}>
+                    <td><b>{s.name}</b></td>
+                    <td className="muted">{s.projectName}</td>
+                    <td>{s.items}</td>
+                    <td>
+                      <div style={{ display: 'flex', gap: 6, justifyContent: 'flex-end' }}>
+                        <button className="btn ghost sm" title="Rename" onClick={() => renameStore(s)}><Pencil size={12} /></button>
+                        <button className="btn ghost sm" title="Delete" onClick={() => deleteStore(s)}><Trash2 size={12} /></button>
+                      </div>
+                    </td>
+                  </tr>
+                ))}
+                {!stores.length && <tr><td colSpan="4" className="muted">No stores yet - each project can have one or more.</td></tr>}
+              </tbody>
+            </table>
+          </div>
         </Modal>
       )}
 

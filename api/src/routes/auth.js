@@ -65,6 +65,8 @@ r.post('/login', async (req, res) => {
   const user = await db.user.findUnique({ where: { email: email ?? '' }, include: { client: true } })
   if (!user || !(await bcrypt.compare(password ?? '', user.passwordHash)))
     return res.status(401).json({ error: 'Wrong email or password' })
+  if (user.role !== 'SUPER' && user.suspended)
+    return res.status(403).json({ error: 'Your account was suspended by your admin' })
   if (user.role !== 'SUPER' && ['SUSPENDED', 'TERMINATED'].includes(user.client?.status))
     return res.status(403).json({ error: `Account ${user.client.status.toLowerCase()} - contact support` })
 

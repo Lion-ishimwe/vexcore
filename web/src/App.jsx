@@ -34,6 +34,7 @@ import Companies from './pages/Companies.jsx'
 import Demos from './pages/Demos.jsx'
 import Payments from './pages/Payments.jsx'
 import AdminSettings from './pages/AdminSettings.jsx'
+import AdminAudit from './pages/AdminAudit.jsx'
 import Account from './pages/Account.jsx'
 import { api, setToken, fmtDate, fmtDay } from './api.js'
 import { Modal } from './ui.jsx'
@@ -60,7 +61,8 @@ const TITLE_KEYS = {
   '/stock': 'nav.stock', '/chat': 'nav.chat', '/team': 'nav.team', '/reports': 'nav.reports',
   '/settings': 'nav.settings', '/billing': 'nav.billing',
   '/admin': 'Platform Dashboard', '/admin/companies': 'Companies', '/admin/demos': 'Demo Bookings',
-  '/admin/payments': 'Subscription Payments', '/admin/settings': 'Settings', '/account': 'nav.account',
+  '/admin/payments': 'Subscription Payments', '/admin/settings': 'Settings',
+  '/admin/audit': 'Platform Audit Trail', '/account': 'nav.account',
 }
 
 // Bottom navigation for phones: the four everyday destinations + the amber
@@ -176,6 +178,7 @@ export default function App() {
         { to: '/admin/companies', icon: Building2, label: 'Companies', cap: null },
         { to: '/admin/payments', icon: CreditCard, label: 'Payments', cap: null },
         { to: '/admin/demos', icon: CalendarDays, label: 'Demos', cap: null },
+        { to: '/admin/audit', icon: Shield, label: 'Audit', cap: null },
         { to: '/admin/settings', icon: SettingsIcon, label: 'Settings', cap: null },
       ]
     : NAV.filter((n) => can(n.cap))
@@ -271,6 +274,7 @@ export default function App() {
                 <Route path="/admin/demos" element={<Demos />} />
                 <Route path="/admin/payments" element={<Payments />} />
                 <Route path="/admin/settings" element={<AdminSettings />} />
+                <Route path="/admin/audit" element={<AdminAudit />} />
                 <Route path="/account" element={<Account />} />
                 <Route path="*" element={<Navigate to="/admin" />} />
               </>

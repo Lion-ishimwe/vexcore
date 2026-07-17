@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import {
   Search, LayoutGrid, List, Download, MoreHorizontal, Eye, KeyRound, Copy,
-  ShieldCheck, ShieldOff, CheckCircle2, Network,
+  ShieldCheck, ShieldOff, CheckCircle2, Network, UserX, UserCheck, Trash2,
 } from 'lucide-react'
 import { api, fmtDate, fmtDay } from '../api.js'
 import { useAuth } from '../auth.jsx'
@@ -20,7 +20,7 @@ const ORG_LEVELS = [
 ]
 
 export default function Team() {
-  const { user, client } = useAuth()
+  const { user, client, can } = useAuth()
   const [team, setTeam] = useState(null)
   const [error, setError] = useState(null)
   const [creating, setCreating] = useState(false)
@@ -54,6 +54,32 @@ export default function Team() {
   // Owners can reset anyone's password; other roles only those they can create.
   const canReset = (t) => t.id !== user.id &&
     (user.role === 'CLIENT' || (CREATABLE[user.role] ?? []).includes(t.role))
+
+  // Suspend/activate/delete: admins always; Senior Engineers when the admin
+  // granted it in Settings › Access control - and only roles they can create.
+  const canManage = (t) => can('team.manage') && t.id !== user.id &&
+    (user.role === 'CLIENT' || (CREATABLE[user.role] ?? []).includes(t.role))
+
+  const [actionError, setActionError] = useState(null)
+
+  const toggleSuspend = async (t) => {
+    setMenuFor(null); setActionError(null)
+    if (t.suspended || window.confirm(`Suspend ${t.name}? They will be signed out and unable to log in until reactivated.`)) {
+      try {
+        await api(`/team/${t.id}`, { method: 'PATCH', body: { suspended: !t.suspended } })
+        load()
+      } catch (err) { setActionError(err.message) }
+    }
+  }
+
+  const removeMember = async (t) => {
+    setMenuFor(null); setActionError(null)
+    if (!window.confirm(`Delete ${t.name}'s account permanently? This cannot be undone.`)) return
+    try {
+      await api(`/team/${t.id}`, { method: 'DELETE' })
+      load()
+    } catch (err) { setActionError(err.message) }
+  }
 
   const openReset = (t) => {
     setMenuFor(null)
@@ -137,6 +163,8 @@ export default function Team() {
         {creatable.length > 0 && <button className="btn" onClick={() => setCreating(true)}>+ Add Team Member</button>}
       </div>
 
+      <ErrorNote error={actionError} />
+
       {view === 'grid' ? (
         <div className="team-grid">
           {filtered.map((t) => (
@@ -156,11 +184,21 @@ export default function Team() {
                       {canReset(t) && (
                         <button onClick={() => openReset(t)}><KeyRound size={13} /> Reset password</button>
                       )}
+                      {canManage(t) && (
+                        <>
+                          <button onClick={() => toggleSuspend(t)}>
+                            {t.suspended ? <><UserCheck size={13} /> Activate</> : <><UserX size={13} /> Suspend</>}
+                          </button>
+                          <button onClick={() => removeMember(t)} style={{ color: 'var(--red, #dc2626)' }}>
+                            <Trash2 size={13} /> Delete
+                          </button>
+                        </>
+                      )}
                     </div>
                   </>
                 )}
               </div>
-              <div className="tm-body">
+              <div className="tm-body" style={t.suspended ? { opacity: 0.55 } : undefined}>
                 <Avatar name={t.name} photo={t.photo} />
                 <div className="tm-id">
                   <b>{t.name}{t.id === user.id ? ' (you)' : ''}</b>
@@ -170,9 +208,13 @@ export default function Team() {
               </div>
               <div className="tm-foot">
                 <span className="small muted">Joined {fmtDay(t.createdAt)}</span>
-                <span className={`badge ${t.totpEnabled ? 'green' : 'gray'}`}>
-                  {t.totpEnabled ? <ShieldCheck size={11} /> : <ShieldOff size={11} />} 2FA {t.totpEnabled ? 'On' : 'Off'}
-                </span>
+                {t.suspended ? (
+                  <span className="badge red"><UserX size={11} /> Suspended</span>
+                ) : (
+                  <span className={`badge ${t.totpEnabled ? 'green' : 'gray'}`}>
+                    {t.totpEnabled ? <ShieldCheck size={11} /> : <ShieldOff size={11} />} 2FA {t.totpEnabled ? 'On' : 'Off'}
+                  </span>
+                )}
               </div>
             </div>
           ))}
@@ -181,13 +223,14 @@ export default function Team() {
       ) : view === 'list' ? (
         <div className="card table-card">
           <table>
-            <thead><tr><th>Name</th><th>Email</th><th>Role</th><th>2FA</th><th>Joined</th></tr></thead>
+            <thead><tr><th>Name</th><th>Email</th><th>Role</th><th>Status</th><th>2FA</th><th>Joined</th></tr></thead>
             <tbody>
               {filtered.map((t) => (
-                <tr key={t.id}>
+                <tr key={t.id} style={t.suspended ? { opacity: 0.55 } : undefined}>
                   <td style={{ display: 'flex', alignItems: 'center', gap: 10 }}><Avatar name={t.name} photo={t.photo} /><b>{t.name}</b></td>
                   <td className="muted">{t.email}</td>
                   <td><span className={`badge ${ROLE_BADGE[t.role] ?? 'gray'}`}>{ROLE_LABEL[t.role] ?? t.role}</span></td>
+                  <td><span className={`badge ${t.suspended ? 'red' : 'green'}`}>{t.suspended ? 'Suspended' : 'Active'}</span></td>
                   <td><span className={`badge ${t.totpEnabled ? 'green' : 'gray'}`}>{t.totpEnabled ? 'On' : 'Off'}</span></td>
                   <td className="muted">{fmtDate(t.createdAt)}</td>
                 </tr>
@@ -255,6 +298,7 @@ export default function Team() {
           </div>
           <div className="tm-view-rows">
             <div><span>Role</span><b>{ROLE_LABEL[viewing.role] ?? viewing.role}</b></div>
+            <div><span>Badge / card</span><b>{viewing.cardId ?? 'generated on next badge-sheet visit'}</b></div>
             <div><span>Two-factor auth</span>
               <span className={`badge ${viewing.totpEnabled ? 'green' : 'gray'}`}>{viewing.totpEnabled ? 'On' : 'Off'}</span>
             </div>

@@ -41,7 +41,7 @@ export async function wagesForProjects(clientId, projectIds) {
   for (const s of sessions) {
     const day = dayKey(s.date)
     for (const rec of s.records) {
-      if (!rec.clockInAt) continue
+      if (!rec.worker || !rec.clockInAt) continue // team-member badges earn no wages
       const key = `${s.projectId}|${rec.workerId}|${day}`
       if (seen.has(key)) continue
       seen.add(key)
@@ -214,6 +214,49 @@ r.post('/', requireCap('projects.create'), async (req, res) => {
   })
   await audit(req.client.id, req.user.name, 'project.created', name)
   res.json(project)
+})
+
+// Edit a project's details (admin only - same capability that creates them).
+r.patch('/:id', requireCap('projects.create'), async (req, res) => {
+  const project = await db.project.findFirst({ where: { id: +req.params.id, clientId: req.client.id } })
+  if (!project) return res.status(404).json({ error: 'Project not found' })
+  const data = {}
+  if (req.body.name !== undefined && String(req.body.name).trim()) data.name = String(req.body.name).trim()
+  if (req.body.location !== undefined) data.location = String(req.body.location).trim() || null
+  if (req.body.budget !== undefined) data.budget = Number(req.body.budget) || 0
+  if (req.body.status !== undefined && ['Planning', 'In progress', 'Done'].includes(req.body.status)) data.status = req.body.status
+  if (!Object.keys(data).length) return res.status(400).json({ error: 'Nothing to change' })
+  const updated = await db.project.update({ where: { id: project.id }, data })
+  await audit(req.client.id, req.user.name, 'project.edited', data.name ?? project.name)
+  res.json(updated)
+})
+
+// Delete a project and everything inside it (admin only): phases, daily
+// reports and their media records, attendance, team assignments, requests and
+// damaged-item logs. Workers and stock items assigned to it are kept - they
+// move back to "all projects" / the general store.
+r.delete('/:id', requireCap('projects.create'), async (req, res) => {
+  const project = await db.project.findFirst({ where: { id: +req.params.id, clientId: req.client.id } })
+  if (!project) return res.status(404).json({ error: 'Project not found' })
+  const pid = project.id
+  await db.$transaction([
+    db.media.deleteMany({ where: { update: { projectId: pid } } }),
+    db.updateMaterial.deleteMany({ where: { update: { projectId: pid } } }),
+    db.dailyUpdate.deleteMany({ where: { projectId: pid } }),
+    db.attendanceRecord.deleteMany({ where: { session: { projectId: pid } } }),
+    db.attendanceSession.deleteMany({ where: { projectId: pid } }),
+    db.phaseMaterial.deleteMany({ where: { phase: { projectId: pid } } }),
+    db.keyInsight.deleteMany({ where: { phase: { projectId: pid } } }),
+    db.phase.deleteMany({ where: { projectId: pid } }),
+    db.projectMember.deleteMany({ where: { projectId: pid } }),
+    db.stockRequest.deleteMany({ where: { projectId: pid } }),
+    db.damagedItem.deleteMany({ where: { projectId: pid } }),
+    db.worker.updateMany({ where: { projectId: pid }, data: { projectId: null } }),
+    db.stockItem.updateMany({ where: { projectId: pid }, data: { projectId: null } }),
+    db.project.delete({ where: { id: pid } }),
+  ])
+  await audit(req.client.id, req.user.name, 'project.deleted', project.name)
+  res.json({ ok: true })
 })
 
 r.post('/:id/phases', requireCap('phases.edit'), async (req, res) => {
@@ -643,7 +686,7 @@ r.get('/phases/:id/report', requireCap('phases.view'), async (req, res) => {
   for (const s of sessions) {
     const day = dayKey(s.date)
     for (const rec of s.records) {
-      if (!rec.clockInAt) continue
+      if (!rec.worker || !rec.clockInAt) continue // team-member badges earn no wages
       const key = `${rec.workerId}|${day}`
       if (seen.has(key)) continue
       seen.add(key)
@@ -772,7 +815,7 @@ r.get('/updates', requireCap('updates.view'), async (req, res) => {
     let wages = 0
     for (const s of daySessions) {
       for (const rec of s.records) {
-        if (!rec.clockInAt || seen.has(rec.workerId)) continue
+        if (!rec.worker || !rec.clockInAt || seen.has(rec.workerId)) continue
         seen.add(rec.workerId)
         const amount = rec.rateSnap ?? rec.worker.dailyRate ?? 0
         wages += amount

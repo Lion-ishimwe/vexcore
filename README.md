@@ -86,7 +86,12 @@ Or with Docker (app + MySQL, one command): `cp .env.example .env`, fill it in, t
   them via the submit → forward chain (enforced server-side).
 - Stock: consumables + machines (serial required), **CSV template + bulk upload**,
   low-stock alerts, request → approve/reject flow, damaged-item log (hidden from
-  Stock Manager). Audit trail on all key actions.
+  Stock Manager). **Issue items** - proof of consumption: the Stock Manager (or
+  Senior/Admin) records handing materials to a person, identified by **scanning
+  their worker card** or picked manually (workers or team members), one or more
+  items per issue with quantities; stock deducts and every hand-out lands in the
+  "Issued items" log with a card-scan/manual proof badge. Audit trail on all key
+  actions.
 - Attendance: worker registry (CSV bulk enrolment, printable QR badges, issued-cards
   log), card-tap **kiosk**, per-phase sessions with pause/activate, time windows,
   reports with CSV export, **present/absent summary** (green/red, per day and per

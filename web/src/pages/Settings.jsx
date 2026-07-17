@@ -19,6 +19,11 @@ const ACCESS_TOGGLES = [
   { key: 'stockVisibleToSite', label: 'Stock visibility for Site Engineers', sub: 'Site Engineers can view stock status (quantities only)' },
   { key: 'mediaDownload', label: 'Media downloads', sub: 'Allow downloading progress photos and videos (in-app viewing is always on)' },
   { key: 'stockMgrEdit', label: 'Stock Manager can edit/delete products', sub: 'Otherwise additions are submitted for Senior Engineer approval' },
+  { key: 'seniorTeamManage', label: 'Senior Engineers manage team accounts', sub: 'Allow Senior Engineers to suspend, activate or delete Site Engineer and Stock Manager accounts' },
+  { key: 'attSenior', label: 'Attendance for Senior Engineers', sub: 'Senior Engineers can open the Attendance page, run sessions and record workers' },
+  { key: 'attSite', label: 'Attendance for Site Engineers', sub: 'Site Engineers can open the Attendance page and record workers' },
+  { key: 'attStock', label: 'Attendance for Stock Managers', sub: 'Full attendance access: open and close sessions, record and scan cards, enrol workers and generate cards' },
+  { key: 'projStock', label: 'Projects for Stock Managers', sub: 'Stock Managers can view their assigned projects and phase boards (view-only)' },
 ]
 
 // Email notifications the company's users receive - each one can be switched
