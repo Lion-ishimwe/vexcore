@@ -2,6 +2,7 @@ import { Router } from 'express'
 import { db, audit } from '../db.js'
 import { requireCap, can } from '../auth.js'
 import { scopedProjectIds, projectScopeWhere, inScope } from '../scope.js'
+import { checkLowStock } from '../stockAlerts.js'
 
 const r = Router()
 
@@ -102,6 +103,7 @@ r.patch('/:id', requireCap('stock.edit'), async (req, res) => {
   }
   const updated = await db.stockItem.update({ where: { id: item.id }, data })
   await audit(req.client.id, req.user.name, 'stock.edited', item.name)
+  checkLowStock(req.client, updated, item.qty)
   res.json(updated)
 })
 

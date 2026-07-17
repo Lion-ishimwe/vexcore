@@ -2,17 +2,17 @@ import { db } from './db.js'
 
 // Project-level scoping: returns the project ids this user is limited to,
 // or null for "no restriction".
-// - Admins (CLIENT), SUPER and guests see every project in the account.
-// - SENIOR / SITE / STOCK assigned to projects see only those projects.
-// - Staff assigned to no project keep full visibility (legacy default, and
-//   how single-project accounts keep working without any setup).
+// - Admins (CLIENT) and SUPER see every project in the account.
+// - Everyone else (SENIOR / SITE / STOCK / GUEST) sees ONLY the projects they
+//   are assigned to (Projects › Assign team) - even the project count. A user
+//   assigned to nothing sees no projects at all until the admin assigns them.
 export async function scopedProjectIds(req) {
-  if (!req.client || ['CLIENT', 'SUPER', 'GUEST'].includes(req.user.role)) return null
+  if (!req.client || ['CLIENT', 'SUPER'].includes(req.user.role)) return null
   const rows = await db.projectMember.findMany({
     where: { userId: req.user.id, project: { clientId: req.client.id } },
     select: { projectId: true },
   })
-  return rows.length ? rows.map((r) => r.projectId) : null
+  return rows.map((r) => r.projectId) // [] = strictly nothing
 }
 
 // Prisma `where` fragment for records that carry an optional projectId:

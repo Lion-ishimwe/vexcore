@@ -91,7 +91,7 @@ export default function Projects() {
             </div>
             <div className="flex-between small" style={{ marginTop: 6 }}>
               <span className="muted">Team</span>
-              <b>{p.team.length ? `${p.team.length} assigned` : 'Everyone'}</b>
+              <b>{p.team.length ? `${p.team.length} assigned` : 'Admins only'}</b>
             </div>
             {p.team.length > 0 && (
               <div className="chips mt">
@@ -145,7 +145,7 @@ export default function Projects() {
                 {!staff.length && <p className="muted small">No team members yet - add them on the Team page first.</p>}
               </div>
               <button className="btn mt" style={{ width: '100%', justifyContent: 'center' }} disabled={busy}>
-                Save team ({picked.length ? `${picked.length} member${picked.length > 1 ? 's' : ''}` : 'open to everyone'})
+                Save team ({picked.length ? `${picked.length} member${picked.length > 1 ? 's' : ''}` : 'no members - admins only'})
               </button>
             </form>
           )}

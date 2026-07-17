@@ -19,6 +19,11 @@ export const DEFAULT_SETTINGS = {
   // Worker types available when enrolling (Settings › Access control) - the
   // admin can add site roles beyond the two defaults.
   workerTypes: ['builder', 'helper'],
+  // Email notifications (Settings › Access control) - each one the company's
+  // users receive can be switched off individually by the admin.
+  emailPhaseDone: true,
+  emailDailyReport: true,
+  emailLowStock: true,
   // Attendance time windows: when enabled, clock-ins/outs are only accepted
   // inside these ranges (late arrivals are not recorded).
   attWindows: false,

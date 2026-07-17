@@ -3,8 +3,9 @@ import multer from 'multer'
 import path from 'node:path'
 import fs from 'node:fs'
 import { db, audit } from '../db.js'
-import { requireCap, can } from '../auth.js'
+import { requireCap, can, settingsOf } from '../auth.js'
 import { sendMail, APP_URL } from '../mail.js'
+import { checkLowStock } from '../stockAlerts.js'
 import { planLimits } from '../plans.js'
 import { scopedProjectIds, inScope } from '../scope.js'
 
@@ -187,7 +188,7 @@ r.put('/:id/team', requireCap('team.create'), async (req, res) => {
     db.projectMember.createMany({ data: users.map(u => ({ projectId: project.id, userId: u.id })) }),
   ])
   await audit(req.client.id, req.user.name, 'project.team',
-    `${project.name}: ${users.length ? users.map(u => u.name).join(', ') : 'everyone (unassigned)'}`)
+    `${project.name}: ${users.length ? users.map(u => u.name).join(', ') : 'nobody (admins only)'}`)
   res.json({ ok: true, team: users })
 })
 
@@ -319,7 +320,9 @@ r.patch('/phases/:id', requireCap('phases.edit'), async (req, res) => {
     data.signedOffBy = req.user.name
     await audit(req.client.id, req.user.name, 'phase.signedoff', phase.name)
     // Notify the account admins: dashboard banner (recent sign-offs) + email.
-    const owners = await db.user.findMany({ where: { clientId: req.client.id, role: 'CLIENT' } })
+    const owners = settingsOf(req.client).emailPhaseDone
+      ? await db.user.findMany({ where: { clientId: req.client.id, role: 'CLIENT' } })
+      : []
     sendMail(owners.map(o => o.email), `Phase completed: ${phase.name} (${phase.project.name})`, {
       title: 'Phase completed ✔',
       lines: [
@@ -459,13 +462,14 @@ r.post('/phases/:id/materials', requireCap('phases.edit'), async (req, res) => {
   if (!n || n <= 0) return res.status(400).json({ error: 'Quantity must be a positive number' })
   if (item.qty < n) return res.status(400).json({ error: `Only ${item.qty} ${item.unit} in stock` })
 
-  const [material] = await db.$transaction([
+  const [material, updatedItem] = await db.$transaction([
     db.phaseMaterial.create({
       data: { phaseId: phase.id, stockItemId: item.id, nameSnap: item.name, qty: n, unitCostSnap: item.unitCost },
     }),
     db.stockItem.update({ where: { id: item.id }, data: { qty: { decrement: n } } }),
   ])
   await audit(req.client.id, req.user.name, 'phase.material', `${n} ${item.unit} ${item.name} → ${phase.name}`)
+  checkLowStock(req.client, updatedItem, item.qty)
   res.json(material)
 })
 
@@ -866,6 +870,10 @@ r.post('/updates', requireCap('updates.submit'), upload.array('media', 12), asyn
     }
     return u
   })
+  // Low-stock alerts for anything this report just consumed
+  for (const d of draws)
+    checkLowStock(req.client, { ...d.item, qty: d.item.qty - d.qty }, d.item.qty)
+
   const itemNote = draws.length
     ? `, used ${draws.map(d => `${d.qty} ${d.item.unit} ${d.item.name}`).join(', ')}`
     : ''
@@ -877,9 +885,11 @@ r.post('/updates', requireCap('updates.submit'), upload.array('media', 12), asyn
   const phaseName = update.phaseId
     ? (await db.phase.findFirst({ where: { id: update.phaseId }, select: { name: true } }))?.name
     : null
-  const recipients = await db.user.findMany({
-    where: { clientId: req.client.id, role: { in: ['SENIOR', 'CLIENT'] }, NOT: { id: req.user.id } },
-  })
+  const recipients = settingsOf(req.client).emailDailyReport
+    ? await db.user.findMany({
+        where: { clientId: req.client.id, role: { in: ['SENIOR', 'CLIENT'] }, NOT: { id: req.user.id } },
+      })
+    : []
   sendMail(recipients.map(u => u.email), `Daily report submitted - ${project.name}`, {
     title: 'Daily report submitted',
     lines: [

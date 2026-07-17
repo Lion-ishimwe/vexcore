@@ -21,6 +21,15 @@ const ACCESS_TOGGLES = [
   { key: 'stockMgrEdit', label: 'Stock Manager can edit/delete products', sub: 'Otherwise additions are submitted for Senior Engineer approval' },
 ]
 
+// Email notifications the company's users receive - each one can be switched
+// off individually by the admin. (Password-reset emails always work - they're
+// part of logging in, not a notification.)
+const NOTIF_TOGGLES = [
+  { key: 'emailPhaseDone', label: 'Phase completed', sub: 'Email the admins when a phase is signed off, with a link to its completion report' },
+  { key: 'emailDailyReport', label: 'Daily report submitted', sub: 'Email the Senior Engineers and admins when a daily site report lands' },
+  { key: 'emailLowStock', label: 'Low stock alert', sub: 'Email admins, Senior Engineers and Stock Managers when an item crosses its low-stock threshold' },
+]
+
 // Guest areas are view-only and enabled individually (money is never shown).
 const GUEST_TOGGLES = [
   { key: 'guestPhases', label: 'Phases & tasks', sub: 'Guests can open the phase board and phase reports' },
@@ -248,6 +257,14 @@ export default function Settings() {
               Role permissions - changes apply immediately to all users in your account.
             </p>
             {ACCESS_TOGGLES.map((t) => <Toggle t={t} key={t.key} />)}
+          </div>
+
+          <div className="card mt">
+            <h3>Email notifications</h3>
+            <p className="small muted" style={{ margin: '6px 0 4px' }}>
+              Which events send an email to your team - switch any of them off without touching the in-app notifications.
+            </p>
+            {NOTIF_TOGGLES.map((t) => <Toggle t={t} key={t.key} />)}
           </div>
 
           <div className="card mt">

@@ -122,8 +122,8 @@ model Project {
 }
 
 // Project-scoped team: each project has its own senior/site engineers, stock
-// manager and guests. A user on no projects sees everything (legacy default);
-// once assigned, they only see their projects' data.
+// manager and guests. Non-admin users see ONLY their assigned projects' data -
+// someone assigned to nothing sees no projects until the admin assigns them.
 model ProjectMember {
   id        Int     @id @default(autoincrement())
   projectId Int
