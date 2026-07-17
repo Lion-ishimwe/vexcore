@@ -1,10 +1,20 @@
 import { useEffect, useState } from 'react'
-import { Link } from 'react-router-dom'
+import { useNavigate } from 'react-router-dom'
 import { HardHat, Users, Camera, Video, MapPin, DraftingCompass, CheckCircle2 } from 'lucide-react'
 import { api, fmtMoney, fmtDate } from '../api.js'
 import { useAuth } from '../auth.jsx'
 import { useT } from '../i18n.jsx'
-import { Avatar, Lightbox } from '../ui.jsx'
+import { Avatar, Lightbox, Modal } from '../ui.jsx'
+
+// Sign-off notifications pop up once and are then acknowledged per browser -
+// keyed by the sign-off time, so a reopened & re-signed phase notifies again.
+const signoffSeenKey = 'bridge_signoff_seen'
+const getSignoffSeen = () => { try { return JSON.parse(localStorage.getItem(signoffSeenKey)) ?? {} } catch { return {} } }
+const markSignoffSeen = (phases) => {
+  const seen = getSignoffSeen()
+  for (const p of phases) seen[p.id] = p.signedOffAt
+  localStorage.setItem(signoffSeenKey, JSON.stringify(seen))
+}
 
 // Auto-sliding carousel of the images in the Design folder.
 function DesignSlider({ images, onOpen }) {
@@ -56,11 +66,29 @@ function Donut({ percent, label, color = '#f59e0b' }) {
 export default function Dashboard() {
   const { client } = useAuth()
   const { t } = useT()
+  const nav = useNavigate()
   const [d, setD] = useState(null)
   const [error, setError] = useState(null)
   const [lightbox, setLightbox] = useState(null)
+  const [signoffs, setSignoffs] = useState([]) // unacknowledged sign-offs → popup
 
-  useEffect(() => { api('/dashboard').then(setD).catch((e) => setError(e.message)) }, [])
+  useEffect(() => {
+    api('/dashboard').then((data) => {
+      setD(data)
+      const seen = getSignoffSeen()
+      setSignoffs((data.completedPhases ?? []).filter((p) => seen[p.id] !== p.signedOffAt))
+    }).catch((e) => setError(e.message))
+  }, [])
+
+  const dismissSignoffs = () => {
+    markSignoffSeen(signoffs)
+    setSignoffs([])
+  }
+  const openReport = (p) => {
+    markSignoffSeen(signoffs) // viewing counts as acknowledged
+    setSignoffs([])
+    nav(`/phases/${p.id}/report`)
+  }
 
   if (error) return <div className="error-note">{error}</div>
   if (!d) return <div className="spin">Loading dashboard…</div>
@@ -68,17 +96,25 @@ export default function Dashboard() {
 
   return (
     <>
-      {/* Sign-off notifications: a completed phase links straight to its report */}
-      {d.completedPhases?.length > 0 && d.completedPhases.map((p) => (
-        <div className="card signoff-banner" key={p.id}>
-          <CheckCircle2 size={20} className="signoff-icon" />
-          <div style={{ flex: 1, minWidth: 0 }}>
-            <b>Phase &ldquo;{p.name}&rdquo; is complete - {p.project}</b>
-            <div className="small muted">Signed off by {p.signedOffBy} · {fmtDate(p.signedOffAt)}</div>
-          </div>
-          <Link className="btn sm" to={`/phases/${p.id}/report`}>View phase report</Link>
-        </div>
-      ))}
+      {/* Sign-off notifications: pop up once on opening the dashboard, then
+          acknowledged - they never sit on the dashboard itself. */}
+      {signoffs.length > 0 && (
+        <Modal title={`✔ Phase${signoffs.length === 1 ? '' : 's'} completed (${signoffs.length})`} onClose={dismissSignoffs}>
+          {signoffs.map((p) => (
+            <div key={p.id} className="signoff-banner" style={{ borderRadius: 10, padding: '11px 13px', border: '1px solid var(--border)' }}>
+              <CheckCircle2 size={18} className="signoff-icon" />
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <b>Phase &ldquo;{p.name}&rdquo; is complete - {p.project}</b>
+                <div className="small muted">Signed off by {p.signedOffBy} · {fmtDate(p.signedOffAt)}</div>
+              </div>
+              <button className="btn sm" onClick={() => openReport(p)}>View phase report</button>
+            </div>
+          ))}
+          <button className="btn ghost" style={{ width: '100%', justifyContent: 'center' }} onClick={dismissSignoffs}>
+            Got it
+          </button>
+        </Modal>
+      )}
 
       <div className="grid grid-4">
         <div className="card">

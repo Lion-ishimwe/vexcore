@@ -5,6 +5,7 @@ import { verifySync } from 'otplib'
 import { db, audit } from '../db.js'
 import { sign, authRequired, capsFor, settingsOf, signSetupToken, verifySetupToken, signImpersonation } from '../auth.js'
 import { subscriptionOf } from '../plans.js'
+import { sendMail, mailConfigured, APP_URL } from '../mail.js'
 import { sha256, normalizeCode, beginTotpSetup, activateTotp } from './account.js'
 
 const r = Router()
@@ -157,16 +158,26 @@ r.post('/impersonate/:clientId', authRequired, async (req, res) => {
   res.json({ token: signImpersonation(req.user, client), company: client.company })
 })
 
-// Forgot password. No mailer configured in dev, so the reset token is returned
-// directly; in production this would be emailed instead.
+// Forgot password: with SMTP configured the reset link is emailed; without a
+// mailer (dev) the token is returned directly so the flow stays usable.
 r.post('/forgot', async (req, res) => {
   const user = await db.user.findUnique({ where: { email: req.body.email ?? '' } })
-  if (!user) return res.json({ ok: true }) // do not reveal which emails exist
+  if (!user) return res.json({ ok: true, emailed: mailConfigured }) // do not reveal which emails exist
   const token = crypto.randomBytes(24).toString('hex')
   await db.resetToken.create({
     data: { userId: user.id, token, expiresAt: new Date(Date.now() + 3600 * 1000) },
   })
-  res.json({ ok: true, devToken: token })
+  sendMail(user.email, 'Reset your Bridge password', {
+    title: 'Reset your password',
+    lines: [
+      `Hi ${user.name},`,
+      'Someone (hopefully you) asked to reset the password for this account. Click the button below to choose a new one - the link works for 1 hour.',
+      'If you did not ask for this, you can safely ignore this email.',
+    ],
+    buttonText: 'Reset password',
+    buttonUrl: `${APP_URL}/#/login?reset=${token}`,
+  })
+  res.json({ ok: true, emailed: mailConfigured, ...(mailConfigured ? {} : { devToken: token }) })
 })
 
 r.post('/reset', async (req, res) => {

@@ -35,7 +35,8 @@ export default function Team() {
   // card actions
   const [menuFor, setMenuFor] = useState(null)
   const [viewing, setViewing] = useState(null)
-  const [resetFor, setResetFor] = useState(null) // { member, link } | { member, error }
+  const [resetFor, setResetFor] = useState(null) // { member, link?, emailed?, done?, error? }
+  const [rpw, setRpw] = useState({ password: '', confirm: '' })
   const [copied, setCopied] = useState(false)
 
   const load = () => api('/team').then(setTeam).catch((e) => setError(e.message))
@@ -54,12 +55,31 @@ export default function Team() {
   const canReset = (t) => t.id !== user.id &&
     (user.role === 'CLIENT' || (CREATABLE[user.role] ?? []).includes(t.role))
 
-  const resetLink = async (t) => {
-    setMenuFor(null); setCopied(false)
+  const openReset = (t) => {
+    setMenuFor(null)
+    setCopied(false)
+    setRpw({ password: '', confirm: '' })
+    setResetFor({ member: t })
+  }
+
+  // Option 1: email the reset invitation (also returns a copyable link)
+  const emailReset = async (send) => {
+    setCopied(false)
     try {
-      const r = await api(`/team/${t.id}/reset-link`, { method: 'POST' })
-      setResetFor({ member: t, link: `${window.location.origin}/#/login?reset=${r.token}` })
-    } catch (err) { setResetFor({ member: t, error: err.message }) }
+      const r = await api(`/team/${resetFor.member.id}/reset-link`, { method: 'POST', body: { sendEmail: send } })
+      setResetFor((s) => ({ ...s, link: `${window.location.origin}/#/login?reset=${r.token}`, emailed: r.emailed, error: null }))
+    } catch (err) { setResetFor((s) => ({ ...s, error: err.message })) }
+  }
+
+  // Option 2: the admin types the new password - effective immediately
+  const setDirectly = async (e) => {
+    e.preventDefault()
+    if (rpw.password !== rpw.confirm)
+      return setResetFor((s) => ({ ...s, error: 'The two passwords do not match' }))
+    try {
+      await api(`/team/${resetFor.member.id}/password`, { method: 'POST', body: { password: rpw.password } })
+      setResetFor((s) => ({ ...s, done: true, error: null }))
+    } catch (err) { setResetFor((s) => ({ ...s, error: err.message })) }
   }
 
   const copyLink = () => {
@@ -134,7 +154,7 @@ export default function Team() {
                     <div className="tm-menu">
                       <button onClick={() => { setViewing(t); setMenuFor(null) }}><Eye size={13} /> View more</button>
                       {canReset(t) && (
-                        <button onClick={() => resetLink(t)}><KeyRound size={13} /> Reset password</button>
+                        <button onClick={() => openReset(t)}><KeyRound size={13} /> Reset password</button>
                       )}
                     </div>
                   </>
@@ -245,21 +265,61 @@ export default function Team() {
 
       {resetFor && (
         <Modal title={`Reset password - ${resetFor.member.name}`} onClose={() => setResetFor(null)}>
-          {resetFor.error ? <ErrorNote error={resetFor.error} /> : (
+          <ErrorNote error={resetFor.error} />
+
+          {resetFor.done ? (
             <>
-              <p className="small muted" style={{ marginBottom: 12 }}>
-                Share this link with {resetFor.member.name}. It lets them set a new password
-                and expires in <b>1 hour</b>. Their current password keeps working until they use it.
+              <div className="ok-note">
+                New password set for <b>{resetFor.member.name}</b> - it works right away.
+                Share it with them directly; any outstanding reset links are now invalid.
+              </div>
+              <button className="btn" style={{ width: '100%', justifyContent: 'center' }}
+                onClick={() => setResetFor(null)}>Done</button>
+            </>
+          ) : (
+            <>
+              {/* ---- Option 1: invitation by email ---- */}
+              <p className="small muted" style={{ marginBottom: 10 }}>
+                Send <b>{resetFor.member.name}</b> an email invitation to choose their own new
+                password (the link works for 1 hour), or set a new password for them directly below.
               </p>
-              <div className="tm-link-box">
-                <code>{resetFor.link}</code>
+              <button className="btn" style={{ width: '100%', justifyContent: 'center' }}
+                onClick={() => emailReset(true)}>
+                <KeyRound size={13} /> Email reset invitation to {resetFor.member.email}
+              </button>
+              {resetFor.link && (
+                <div style={{ marginTop: 10 }}>
+                  {resetFor.emailed
+                    ? <div className="ok-note">Invitation emailed to {resetFor.member.email} ✔ You can also copy the same link:</div>
+                    : <div className="ok-note">Email is not configured - copy the link and share it with them:</div>}
+                  <div className="tm-link-box"><code>{resetFor.link}</code></div>
+                  <button className="btn ghost sm" style={{ marginTop: 8 }} onClick={copyLink}>
+                    {copied ? <><CheckCircle2 size={13} /> Copied</> : <><Copy size={13} /> Copy link</>}
+                  </button>
+                </div>
+              )}
+
+              {/* ---- Option 2: set it directly, no invitation ---- */}
+              <div className="small muted" style={{ margin: '16px 0 10px', display: 'flex', alignItems: 'center', gap: 10 }}>
+                <span style={{ flex: 1, height: 1, background: 'var(--border)' }} />
+                or set it directly
+                <span style={{ flex: 1, height: 1, background: 'var(--border)' }} />
               </div>
-              <div style={{ display: 'flex', gap: 8, marginTop: 12 }}>
-                <button className="btn" onClick={copyLink}>
-                  {copied ? <><CheckCircle2 size={13} /> Copied</> : <><Copy size={13} /> Copy link</>}
+              <form onSubmit={setDirectly}>
+                <div className="grid grid-2" style={{ gap: 0, columnGap: 12 }}>
+                  <Field label="New password (min 8)">
+                    <input type="password" value={rpw.password} minLength={8} required
+                      onChange={(e) => setRpw((s) => ({ ...s, password: e.target.value }))} />
+                  </Field>
+                  <Field label="Confirm new password">
+                    <input type="password" value={rpw.confirm} minLength={8} required
+                      onChange={(e) => setRpw((s) => ({ ...s, confirm: e.target.value }))} />
+                  </Field>
+                </div>
+                <button className="btn ghost" style={{ width: '100%', justifyContent: 'center' }}>
+                  Set password now (no email)
                 </button>
-                <button className="btn ghost" onClick={() => setResetFor(null)}>Close</button>
-              </div>
+              </form>
             </>
           )}
         </Modal>

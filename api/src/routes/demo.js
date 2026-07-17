@@ -1,5 +1,6 @@
 import { Router } from 'express'
 import { db } from '../db.js'
+import { sendMail, APP_URL } from '../mail.js'
 
 const r = Router()
 
@@ -38,6 +39,18 @@ r.post('/', async (req, res) => {
         company: company || null, phone: phone || null, teamSize: teamSize || null,
         interests: interests ?? [],
       },
+    })
+    // Email the platform operators alongside the in-app popup notification.
+    const supers = await db.user.findMany({ where: { role: 'SUPER' } })
+    sendMail(supers.map(s => s.email), `New demo booking: ${name}${company ? ` (${company})` : ''}`, {
+      title: 'New demo booked 🔔',
+      lines: [
+        `<b>${name}</b>${company ? ` from <b>${company}</b>` : ''} booked a demo for <b>${slot.toLocaleString('en-GB', { weekday: 'long', day: 'numeric', month: 'long', hour: '2-digit', minute: '2-digit', timeZone: 'Africa/Kigali' })}</b> (CAT).`,
+        `Contact: ${email}${phone ? ` · ${phone}` : ''}${teamSize ? ` · team size ${teamSize}` : ''}`,
+        (interests ?? []).length ? `Wants to see: ${interests.join(', ')}` : '',
+      ].filter(Boolean),
+      buttonText: 'Open the Demos tab',
+      buttonUrl: `${APP_URL}/#/admin/demos`,
     })
     res.json({ id: booking.id, slot: booking.slot })
   } catch (e) {

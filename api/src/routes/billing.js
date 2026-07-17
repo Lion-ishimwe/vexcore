@@ -3,6 +3,7 @@ import crypto from 'node:crypto'
 import { db, audit } from '../db.js'
 import { requireCap } from '../auth.js'
 import { PLANS, MOMO, subscriptionOf } from '../plans.js'
+import { sendMail, APP_URL } from '../mail.js'
 
 const r = Router()
 r.use(requireCap('billing'))
@@ -72,6 +73,18 @@ r.post('/payments/:id/submit', async (req, res) => {
     data: { payerPhone: phone, submittedAt: new Date() },
   })
   await audit(req.client.id, req.user.name, 'billing.submitted', `${payment.reference} paid from ${phone}`)
+  // Ping the platform operators: a payment is waiting to be matched & confirmed.
+  const supers = await db.user.findMany({ where: { role: 'SUPER' } })
+  sendMail(supers.map(s => s.email), `Payment to confirm: ${payment.reference} · ${req.client.company}`, {
+    title: 'Payment waiting for confirmation',
+    lines: [
+      `<b>${req.client.company}</b> reports having paid <b>${payment.amount.toLocaleString()} ${payment.currency}</b> for <b>${payment.plan} × ${payment.months} month${payment.months === 1 ? '' : 's'}</b>.`,
+      `Reference: <b>${payment.reference}</b> · paid from <b>${phone}</b>.`,
+      'Match it against the MoMo statement and confirm or reject it in the Payments tab.',
+    ],
+    buttonText: 'Open the payment queue',
+    buttonUrl: `${APP_URL}/#/admin/payments`,
+  })
   res.json(shape(updated))
 })
 

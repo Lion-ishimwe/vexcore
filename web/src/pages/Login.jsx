@@ -23,7 +23,7 @@ export default function Login() {
   const [mode, setMode] = useState('login') // login | totp | forgot | reset | setup2fa
   const [totp, setTotp] = useState('')
   const [resetInfo, setResetInfo] = useState(null)
-  const [reset, setResetV] = useState({ token: '', password: '' })
+  const [reset, setResetV] = useState({ token: '', password: '', confirm: '' })
   const loc = useLocation()
 
   // Shareable reset link (#/login?reset=TOKEN) - e.g. generated from the Team page.
@@ -97,9 +97,14 @@ export default function Login() {
     setBusy(true); setError(null)
     try {
       const r = await api('/auth/forgot', { method: 'POST', body: { email: v.email } })
-      setResetInfo(r.devToken ?? null)
-      setResetV((s) => ({ ...s, token: r.devToken ?? '' }))
-      setMode('reset')
+      if (r.emailed) {
+        setMode('sent') // the reset link went to their inbox
+      } else {
+        // dev mode (no mailer configured): the token comes back directly
+        setResetInfo(r.devToken ?? null)
+        setResetV((s) => ({ ...s, token: r.devToken ?? '' }))
+        setMode('reset')
+      }
     } catch (err) { setError(err.message) } finally { setBusy(false) }
   }
 
@@ -107,7 +112,8 @@ export default function Login() {
     e.preventDefault()
     setBusy(true); setError(null)
     try {
-      await api('/auth/reset', { method: 'POST', body: reset })
+      if (reset.password !== reset.confirm) throw new Error('The two passwords do not match')
+      await api('/auth/reset', { method: 'POST', body: { token: reset.token, password: reset.password } })
       setMode('login'); setError(null)
       setAll((s) => ({ ...s, password: '' }))
     } catch (err) { setError(err.message) } finally { setBusy(false) }
@@ -123,6 +129,7 @@ export default function Login() {
               {mode === 'login' ? t('login.title') :
                mode === 'totp' ? 'Two-step verification' :
                mode === 'forgot' ? 'Forgot password' :
+               mode === 'sent' ? 'Check your email' :
                mode === 'setup2fa' ? 'Set up two-factor authentication' :
                'Set a new password'}
             </h2>
@@ -132,6 +139,7 @@ export default function Login() {
             {mode === 'login' ? t('login.sub') :
              mode === 'totp' ? `Enter the code from your authenticator app - or one of your backup codes - to finish logging in as ${v.email}.` :
              mode === 'forgot' ? 'Enter your email and we’ll send a reset link.' :
+             mode === 'sent' ? `If an account exists for ${v.email}, a reset link is on its way - it works for 1 hour. Check the spam folder too.` :
              mode === 'setup2fa' ? 'Your account requires 2FA for all users - finish this one-time setup to continue.' :
              'Reset link generated - choose a new password.'}
           </p>
@@ -226,6 +234,12 @@ export default function Login() {
             </div>
           )}
 
+          {mode === 'sent' && (
+            <div className="mt small">
+              <a className="plain" href="#" onClick={(e) => { e.preventDefault(); setMode('login') }}>← Back to login</a>
+            </div>
+          )}
+
           {mode === 'forgot' && (
             <form onSubmit={forgot}>
               <Field label="Email"><input type="email" value={v.email} onChange={set('email')} required autoFocus /></Field>
@@ -237,8 +251,19 @@ export default function Login() {
           {mode === 'reset' && (
             <form onSubmit={doReset}>
               {resetInfo && <div className="ok-note">Dev mode: reset token issued directly (in production this arrives by email).</div>}
-              <Field label="Reset token"><input value={reset.token} onChange={(e) => setResetV((s) => ({ ...s, token: e.target.value }))} required /></Field>
-              <Field label="New password (min 8 characters)"><input type="password" value={reset.password} onChange={(e) => setResetV((s) => ({ ...s, password: e.target.value }))} required /></Field>
+              {/* The token rides along invisibly from the email link (or dev
+                  issuance) - the user only ever chooses their new password. */}
+              {!reset.token && (
+                <Field label="Reset token"><input value={reset.token} onChange={(e) => setResetV((s) => ({ ...s, token: e.target.value }))} required /></Field>
+              )}
+              <Field label="New password (min 8 characters)">
+                <input type="password" value={reset.password} minLength={8} autoFocus
+                  onChange={(e) => setResetV((s) => ({ ...s, password: e.target.value }))} required />
+              </Field>
+              <Field label="Confirm new password">
+                <input type="password" value={reset.confirm} minLength={8}
+                  onChange={(e) => setResetV((s) => ({ ...s, confirm: e.target.value }))} required />
+              </Field>
               <button className="btn" style={{ width: '100%', justifyContent: 'center' }} disabled={busy}>Set password</button>
               <div className="mt small"><a className="plain" href="#" onClick={(e) => { e.preventDefault(); setMode('login') }}>← Back to login</a></div>
             </form>

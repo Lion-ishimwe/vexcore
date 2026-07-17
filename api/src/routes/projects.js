@@ -4,6 +4,7 @@ import path from 'node:path'
 import fs from 'node:fs'
 import { db, audit } from '../db.js'
 import { requireCap, can } from '../auth.js'
+import { sendMail, APP_URL } from '../mail.js'
 import { planLimits } from '../plans.js'
 import { scopedProjectIds, inScope } from '../scope.js'
 
@@ -317,7 +318,17 @@ r.patch('/phases/:id', requireCap('phases.edit'), async (req, res) => {
     data.signedOffAt = new Date()
     data.signedOffBy = req.user.name
     await audit(req.client.id, req.user.name, 'phase.signedoff', phase.name)
-    // Notify the account admins on their dashboard (recent sign-offs section).
+    // Notify the account admins: dashboard banner (recent sign-offs) + email.
+    const owners = await db.user.findMany({ where: { clientId: req.client.id, role: 'CLIENT' } })
+    sendMail(owners.map(o => o.email), `Phase completed: ${phase.name} (${phase.project.name})`, {
+      title: 'Phase completed ✔',
+      lines: [
+        `<b>${req.user.name}</b> signed off the phase <b>"${phase.name}"</b> on <b>${phase.project.name}</b>.`,
+        'The full completion report - duration, budget vs actual, workers and their pay, materials used - is ready for you.',
+      ],
+      buttonText: 'Open the phase report',
+      buttonUrl: `${APP_URL}/#/phases/${phase.id}/report`,
+    })
   }
   if (data.status === 'active' && phase.status === 'todo')
     await audit(req.client.id, req.user.name, 'phase.started', phase.name)
@@ -860,6 +871,26 @@ r.post('/updates', requireCap('updates.submit'), upload.array('media', 12), asyn
     : ''
   await audit(req.client.id, req.user.name, 'update.submitted',
     `${project.name}: ${update.builders} builders, ${update.helpers} helpers, ${update.media.length} media${itemNote}`)
+
+  // Email the Senior Engineers and Admins that a daily report landed (the
+  // submitter is skipped - they know).
+  const phaseName = update.phaseId
+    ? (await db.phase.findFirst({ where: { id: update.phaseId }, select: { name: true } }))?.name
+    : null
+  const recipients = await db.user.findMany({
+    where: { clientId: req.client.id, role: { in: ['SENIOR', 'CLIENT'] }, NOT: { id: req.user.id } },
+  })
+  sendMail(recipients.map(u => u.email), `Daily report submitted - ${project.name}`, {
+    title: 'Daily report submitted',
+    lines: [
+      `<b>${req.user.name}</b> submitted a daily report for <b>${project.name}</b>${phaseName ? ` › <b>${phaseName}</b>` : ''}.`,
+      `Crew on site: ${update.builders} builder${update.builders === 1 ? '' : 's'} · ${update.helpers} helper${update.helpers === 1 ? '' : 's'}${update.media.length ? ` · ${update.media.length} photo/video${update.media.length === 1 ? '' : 's'}` : ''}.`,
+      draws.length ? `Items used: ${draws.map(d => `${d.qty} ${d.item.unit} ${d.item.name}`).join(', ')}.` : '',
+      update.note ? `Note: &ldquo;${String(update.note).slice(0, 200)}&rdquo;` : '',
+    ].filter(Boolean),
+    buttonText: 'Open daily updates',
+    buttonUrl: `${APP_URL}/#/updates`,
+  })
   res.json(update)
 })
 
