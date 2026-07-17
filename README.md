@@ -21,6 +21,9 @@ cd api && npm install && npx prisma db push && npm run seed && npm run dev   # A
 cd web && npm install && npm run dev                                          # Web :5330
 ```
 
+Or with Docker (app + MySQL, one command): `cp .env.example .env`, fill it in, then
+`docker compose up -d --build` - details in [DEPLOY.md](DEPLOY.md).
+
 ## Demo logins (password `demo1234` unless noted)
 
 | Email | Role |

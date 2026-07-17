@@ -1,0 +1,50 @@
+# Bridge Construction - full deployment: MySQL + the app (API + web UI).
+# Configure via a .env file next to this compose file (see .env.example).
+#   docker compose up -d --build
+# The app comes up on http://<host>:${APP_PORT:-4311}
+
+services:
+  db:
+    image: mysql:8.4
+    restart: unless-stopped
+    environment:
+      MYSQL_DATABASE: bridge
+      MYSQL_ROOT_PASSWORD: ${DB_PASSWORD:?set DB_PASSWORD in .env}
+    volumes:
+      - db-data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD-SHELL", "mysqladmin ping -h127.0.0.1 -uroot -p$$MYSQL_ROOT_PASSWORD --silent"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  app:
+    build: .
+    restart: unless-stopped
+    ports:
+      - "${APP_PORT:-4311}:4311"
+    environment:
+      DATABASE_URL: mysql://root:${DB_PASSWORD}@db:3306/bridge
+      JWT_SECRET: ${JWT_SECRET:?set JWT_SECRET in .env}
+      APP_URL: ${APP_URL:-http://localhost:4311}
+      # Email (optional - empty means dev mode: emails log to the container console)
+      SMTP_HOST: ${SMTP_HOST:-}
+      SMTP_PORT: ${SMTP_PORT:-587}
+      SMTP_USER: ${SMTP_USER:-}
+      SMTP_PASS: ${SMTP_PASS:-}
+      MAIL_FROM: ${MAIL_FROM:-}
+      MAIL_REPLY_TO: ${MAIL_REPLY_TO:-}
+      # MoMo account subscribers pay into (shown at checkout)
+      MOMO_NUMBER: ${MOMO_NUMBER:-}
+      MOMO_NAME: ${MOMO_NAME:-}
+      # Load the demo dataset on first boot (demo logins etc.) - set true once
+      SEED_DEMO: ${SEED_DEMO:-false}
+    volumes:
+      - uploads:/app/api/uploads
+    depends_on:
+      db:
+        condition: service_healthy
+
+volumes:
+  db-data:
+  uploads:

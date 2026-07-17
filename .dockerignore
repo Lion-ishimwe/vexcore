@@ -1,0 +1,11 @@
+# Never bake local state or secrets into the image
+.git
+.gitignore
+**/node_modules
+**/dist
+api/.env
+api/uploads
+*.md
+docker-compose.yml
+.env
+.env.example

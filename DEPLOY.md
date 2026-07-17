@@ -7,6 +7,37 @@ built web app (`web/dist`) itself, so there is no separate frontend host.
 Internet → HTTPS (nginx or platform) → Node :4311 (API + web + /uploads) → MySQL
 ```
 
+## Option 0 - Docker (easiest, works on any host with Docker)
+
+Everything is prepared: `Dockerfile` (multi-stage: builds the web app, runs the API
+which serves it), `docker-compose.yml` (app + MySQL with persistent volumes for the
+database and uploads), and `docker-entrypoint.sh` (waits for MySQL, syncs the schema,
+optional demo seed).
+
+```bash
+cp .env.example .env        # then fill in DB_PASSWORD, JWT_SECRET, APP_URL, SMTP…
+docker compose up -d --build
+docker compose logs -f app  # watch it come up
+```
+
+The app is on `http://<host>:4311` (change with `APP_PORT` in `.env`).
+
+**First boot of a fresh install**: set `SEED_DEMO=true` in `.env` for the first
+`up` - it creates the Super Admin login (`super@bridge.app` / `super1234` - **change
+that password immediately** in the app) plus the demo company. The seed is
+idempotent and skips itself once data exists; set it back to `false` afterwards.
+
+Day-2 commands:
+
+```bash
+docker compose up -d --build          # redeploy after a code update (schema auto-syncs)
+docker compose exec db mysqldump -uroot -p"$DB_PASSWORD" bridge > backup.sql   # DB backup
+docker run --rm -v cms_uploads:/u -v "$PWD":/out alpine tar czf /out/uploads.tgz -C /u .  # uploads backup
+```
+
+Put nginx/Caddy (or your platform's load balancer) in front for HTTPS - required in
+production for login tokens and phone-camera QR scanning.
+
 ## Production checklist (any host)
 
 | Item | How |
