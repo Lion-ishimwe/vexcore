@@ -11,6 +11,10 @@ export const DEFAULT_SETTINGS = {
   stockMgrEdit: false,
   twoFA: false,
   guestAccess: true,
+  // Granular guest access - each area is enabled individually by the Admin.
+  guestPhases: true,
+  guestUpdates: true,
+  guestStock: false,
   // Attendance time windows: when enabled, clock-ins/outs are only accepted
   // inside these ranges (late arrivals are not recorded).
   attWindows: false,
@@ -52,6 +56,12 @@ export function capsFor(user, client) {
   if (user.role === 'SITE' && s.stockVisibleToSite) caps.add('stock.view')
   if (user.role === 'STOCK' && s.stockMgrEdit) caps.add('stock.edit')
   if (s.mediaDownload) caps.add('media.download')
+  // Guest areas are opt-in/out individually (Settings → Guest access).
+  if (user.role === 'GUEST') {
+    if (!s.guestPhases) caps.delete('phases.view')
+    if (!s.guestUpdates) caps.delete('updates.view')
+    if (s.guestStock) caps.add('stock.view')
+  }
   return [...caps]
 }
 
@@ -122,14 +132,18 @@ export async function authRequired(req, res, next) {
         error: 'Two-factor authentication is now required for your account - log in again to set it up',
         need2faSetup: true,
       })
-    // Expired trial / lapsed subscription: everything is blocked except
-    // billing (so the admin can pay), auth, and the user's own account page.
+    // Expired trial / lapsed subscription → READ-ONLY lockdown: everyone can
+    // still log in, see everything and download as usual (GET requests pass),
+    // but nothing can be changed until payment. Billing, auth and the user's
+    // own account page stay fully open so the admin can pay.
     const sub = subscriptionOf(user.client)
-    if (sub.expired && !['/api/billing', '/api/auth', '/api/account'].some((p) => req.originalUrl.startsWith(p)))
+    if (sub.expired &&
+      !['GET', 'HEAD'].includes(req.method) &&
+      !['/api/billing', '/api/auth', '/api/account'].some((p) => req.originalUrl.startsWith(p)))
       return res.status(403).json({
         error: user.role === 'CLIENT'
-          ? (sub.status === 'TRIAL' ? 'Your free trial has ended - subscribe to keep working' : 'Your subscription has expired - renew to keep working')
-          : 'This account\'s subscription has expired - ask your admin to renew it',
+          ? (sub.status === 'TRIAL' ? 'Your free trial has ended - subscribe to make changes again' : 'Your subscription has expired - renew to make changes again')
+          : 'This account\'s subscription has expired - viewing is open, but changes need your admin to renew',
         expired: true,
       })
   }

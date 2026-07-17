@@ -46,8 +46,14 @@ cd web && npm install && npm run dev                                          # 
   when the Admin turns it on, every user is walked through setup at next login.
 - **Subscriptions & payments**: Starter/Pro/Enterprise plans, manual **MTN MoMo**
   checkout (unique reference → Super Admin confirms → account activates,
-  `paidUntil` extends). Expired trial/subscription locks the workspace behind a
-  pay-to-unlock screen. Plan limits enforced (projects count, team roles).
+  `paidUntil` extends). Expired subscriptions get a **2-day grace window** - the
+  workspace stays fully usable under a red renewal warning banner (with a Renew
+  button); applies to every paid plan regardless of duration. After grace (and
+  for ended trials) the workspace goes **view-only**: everyone can still log in,
+  see and download everything as usual, but the server refuses every change
+  (only billing/auth/account writes pass) until payment - enforced by HTTP
+  method in the auth gate, not just hidden buttons. Plan limits enforced
+  (projects count, team roles).
 - **Project scoping**: each project has its own **team** (assigned members see only
   their projects), its own **stock** (+ shared general store), **workers**, phases and
   attendance. Project filters on stock, workers, badges and cards.
@@ -80,7 +86,12 @@ cd web && npm install && npm run dev                                          # 
   Stock Manager). Audit trail on all key actions.
 - Attendance: worker registry (CSV bulk enrolment, printable QR badges, issued-cards
   log), card-tap **kiosk**, per-phase sessions with pause/activate, time windows,
-  reports with CSV export.
+  reports with CSV export, **present/absent summary** (green/red, per day and per
+  range) and a per-worker Pay column.
+- **Photos**: optional profile photo for every user (My Account) and every worker
+  (click the avatar in the Workers tab) - shown across the app instead of initials.
+- **Guest access** is granular: Phases, Daily updates and Stock are each enabled
+  individually in Settings (enforced server-side in the capability layer).
 - Chat: company channel + **private DMs** with unread dots, **voice notes** (in-browser
   recording), attachments (8 × 50 MB), **video calls** (embedded Jitsi) with member
   invites and ringing banners. Every photo opens in an in-app lightbox with
@@ -88,8 +99,20 @@ cd web && npm install && npm run dev                                          # 
 - Documents with folders, visibility rules and a dashboard design slider; weather widget.
 - Team page: card directory with search/filters/CSV export and admin-generated
   **password-reset links**.
+- **Reports hub**: one filter bar (date presets, project, phase) driving five tabs -
+  Overview (KPIs, weekly spend chart, budget-vs-actual bars, alerts), Projects & Phases
+  (expectation vs reality in money and days, burn-rate forecast at completion, links to
+  phase reports), Labor & Attendance (wages, worker-days, presence chart, per-worker
+  table), Materials & Stock (consumption, stock value, damaged, requests), and a
+  searchable Audit trail. CSV export per table + print.
 - **Super Admin**: finance dashboard (monthly received / due / pending, renewal
-  reminders with a configurable window), MoMo payment queue, **Companies** directory
+  reminders with a configurable window), MoMo payment queue plus a dedicated
+  **Payments tab** (full history with received/pending/all-time tiles, status
+  filter, search, CSV export and confirm/reject actions), **demo-booking popup
+  notifications** (polled every 30s until acknowledged) and a **Demos tab** - the
+  full booking book with lifecycle tracking (Scheduled / Done / No-show / Canceled),
+  time spent per demo, held-at stamps, outcome notes, status filter, search and CSV
+  export - plus a **Companies** directory
   (statuses, renewal dates) and **support mode** - open any company's workspace as its
   admin (audited, lock-bypassing, platform-endpoints blocked).
 - Production-ready serving: the API serves the built web app - one Node process +

@@ -13,10 +13,10 @@ const CAN_CREATE = { CLIENT: ['SENIOR', 'SITE', 'STOCK', 'GUEST'], SENIOR: ['SIT
 r.get('/', requireCap('team.view'), async (req, res) => {
   const users = await db.user.findMany({
     where: { clientId: req.client.id },
-    select: { id: true, name: true, email: true, role: true, createdAt: true, totpEnabled: true },
+    select: { id: true, name: true, email: true, role: true, createdAt: true, totpEnabled: true, photo: true },
     orderBy: { id: 'asc' },
   })
-  res.json(users)
+  res.json(users.map(u => ({ ...u, photo: u.photo ? '/uploads/' + u.photo : null })))
 })
 
 r.post('/', requireCap('team.create'), async (req, res) => {

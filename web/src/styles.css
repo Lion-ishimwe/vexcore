@@ -1463,3 +1463,87 @@ a.plain { color: var(--blue); text-decoration: none; }
 /* ---- Phase sign-off notification banner on the dashboard ---- */
 .signoff-banner { display: flex; align-items: center; gap: 12px; margin-bottom: 12px; border-left: 4px solid #16a34a; }
 .signoff-icon { color: #16a34a; flex-shrink: 0; }
+.avatar-img { object-fit: cover; background: #eef0f3; flex-shrink: 0; }
+
+/* ---- Attendance report present/absent summary ---- */
+.att-sum { display: flex; gap: 10px; margin-bottom: 12px; flex-wrap: wrap; }
+.att-sum .pill { display: inline-flex; align-items: center; gap: 7px; padding: 7px 13px; border-radius: 9px; font-size: 13px; font-weight: 600; }
+.pill.green { background: #dcfce7; color: #15803d; }
+.pill.red { background: #fee2e2; color: #b91c1c; }
+.pill.gray { background: #eef0f3; color: #475569; }
+.sum-present { color: #15803d; font-weight: 700; }
+.sum-absent { color: #b91c1c; font-weight: 700; }
+
+/* Click-to-change avatar (workers & account) */
+.avatar-upload { position: relative; cursor: pointer; display: inline-flex; }
+.avatar-upload input { display: none; }
+
+/* ---- Worker photos on badges & ID cards ---- */
+/* Bus-pass-style portrait: fills the left of the card body, clearly visible */
+.idc2-photo {
+  width: 92px; height: 118px; border-radius: 8px; object-fit: cover;
+  border: 2px solid #f59e0b; background: #eef0f3; flex-shrink: 0; align-self: center;
+}
+.idc2-left { flex: 1; }
+.wb-photo { width: 74px; height: 92px; border-radius: 8px; object-fit: cover; border: 2px solid #f59e0b; margin: 8px auto 4px; display: block; background: #eef0f3; }
+
+/* ---- Tabbed settings layout (Company Profile / Access Control / ...) ---- */
+.set-tabs { display: flex; gap: 28px; border-bottom: 2px solid var(--border); margin-bottom: 18px; flex-wrap: wrap; }
+.set-tab {
+  padding: 10px 2px 12px; font-size: 13.5px; font-weight: 600; color: var(--muted);
+  background: none; border: none; cursor: pointer; position: relative; font-family: inherit;
+}
+.set-tab:hover { color: #1c2430; }
+.set-tab.on { color: var(--accent-dark); }
+.set-tab.on::after {
+  content: ''; position: absolute; left: 0; right: 0; bottom: -2px; height: 3px;
+  border-radius: 3px; background: var(--accent);
+}
+.profile-grid { display: grid; grid-template-columns: 1fr 1fr; column-gap: 56px; }
+.profile-row {
+  display: flex; justify-content: space-between; align-items: baseline; gap: 16px;
+  padding: 13px 0; border-bottom: 1px solid var(--border); font-size: 13.5px;
+}
+.profile-row span { color: var(--muted); flex-shrink: 0; }
+.profile-row b { text-align: right; min-width: 0; overflow-wrap: anywhere; }
+@media (max-width: 900px) { .profile-grid { grid-template-columns: 1fr; column-gap: 0; } }
+
+/* ---- Language dropdown with flags (login / public pages) ---- */
+.lang-dd { position: relative; flex-shrink: 0; }
+.lang-dd-btn {
+  display: inline-flex; align-items: center; gap: 7px; padding: 7px 12px;
+  border-radius: 999px; border: 1px solid var(--border); background: #fff;
+  font-weight: 700; font-size: 12px; letter-spacing: .04em; color: #1c2430;
+  cursor: pointer; font-family: inherit;
+}
+.lang-dd-btn:hover { border-color: var(--accent); }
+.lang-dd .flag { width: 21px; height: 14px; border-radius: 2.5px; display: block; box-shadow: 0 0 0 1px rgba(0,0,0,.08); }
+.lang-dd-menu {
+  position: absolute; right: 0; top: calc(100% + 6px); z-index: 60; min-width: 172px;
+  background: #fff; border: 1px solid var(--border); border-radius: 12px;
+  box-shadow: 0 14px 34px -14px rgba(15,23,42,.3); padding: 6px;
+}
+.lang-dd-menu button {
+  display: flex; align-items: center; gap: 10px; width: 100%; padding: 9px 10px;
+  border: none; background: none; border-radius: 8px; font-size: 13px;
+  cursor: pointer; font-family: inherit; text-align: left; color: #1c2430;
+}
+.lang-dd-menu button:hover { background: var(--bg); }
+.lang-dd-menu button.on { background: #fef3c7; font-weight: 600; }
+
+/* ---- Reports hub filter bar ---- */
+.rep-filters { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 14px; }
+.rep-filters select, .rep-filters input[type="date"] {
+  padding: 8px 11px; border-radius: 9px; border: 1px solid var(--border);
+  font-size: 12.5px; font-family: inherit; background: #fff;
+}
+
+/* ---- Subscription grace-period warning (2 extra days to renew) ---- */
+.grace-banner {
+  display: flex; align-items: center; justify-content: space-between; gap: 14px;
+  background: #fef2f2; border-bottom: 2px solid #dc2626; color: #7f1d1d;
+  padding: 10px 22px; font-size: 13px; flex-wrap: wrap;
+}
+.grace-banner .btn { flex-shrink: 0; }
+.locked-banner { background: #7f1d1d; border-bottom-color: #450a0a; color: #fee2e2; }
+.locked-banner .btn { background: #fff; color: #7f1d1d; }

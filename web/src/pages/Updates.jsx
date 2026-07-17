@@ -117,7 +117,7 @@ export default function Updates() {
       {updates.map((u) => (
         <div className="card" style={{ marginBottom: 14 }} key={u.id}>
           <div className="update">
-            <Avatar name={u.by} />
+            <Avatar name={u.by} photo={u.byPhoto} />
             <div className="update-card">
               <div className="update-head">
                 <b>{u.by} - {u.project}{u.phase ? ` · ${u.phase}` : ''}</b>

@@ -149,7 +149,7 @@ export default function Dashboard() {
       <div className="card">
         {d.latestUpdates.map((u) => (
           <div className="update" key={u.id} style={{ marginBottom: 14 }}>
-            <Avatar name={u.by} />
+            <Avatar name={u.by} photo={u.byPhoto} />
             <div className="update-card">
               <div className="update-head">
                 <b>{u.by} - {u.project}{u.phase ? ` · ${u.phase}` : ''}</b>

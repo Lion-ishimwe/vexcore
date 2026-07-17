@@ -132,7 +132,7 @@ export default function Team() {
                 )}
               </div>
               <div className="tm-body">
-                <Avatar name={t.name} />
+                <Avatar name={t.name} photo={t.photo} />
                 <div className="tm-id">
                   <b>{t.name}{t.id === user.id ? ' (you)' : ''}</b>
                   <span>{ROLE_LABEL[t.role] ?? t.role}</span>
@@ -156,7 +156,7 @@ export default function Team() {
             <tbody>
               {filtered.map((t) => (
                 <tr key={t.id}>
-                  <td style={{ display: 'flex', alignItems: 'center', gap: 10 }}><Avatar name={t.name} /><b>{t.name}</b></td>
+                  <td style={{ display: 'flex', alignItems: 'center', gap: 10 }}><Avatar name={t.name} photo={t.photo} /><b>{t.name}</b></td>
                   <td className="muted">{t.email}</td>
                   <td><span className={`badge ${ROLE_BADGE[t.role] ?? 'gray'}`}>{ROLE_LABEL[t.role] ?? t.role}</span></td>
                   <td><span className={`badge ${t.totpEnabled ? 'green' : 'gray'}`}>{t.totpEnabled ? 'On' : 'Off'}</span></td>
@@ -188,7 +188,7 @@ export default function Team() {
       {viewing && (
         <Modal title="Team member" onClose={() => setViewing(null)}>
           <div className="tm-view">
-            <Avatar name={viewing.name} />
+            <Avatar name={viewing.name} photo={viewing.photo} />
             <div>
               <b style={{ fontSize: 16 }}>{viewing.name}</b>
               <div className="small muted">{viewing.email}</div>

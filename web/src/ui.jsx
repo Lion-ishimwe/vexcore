@@ -36,9 +36,10 @@ export function useForm(initial) {
   return [values, set, setValues]
 }
 
-export const Avatar = ({ name }) => (
-  <div className="avatar">{(name ?? '?').split(' ').map((w) => w[0]).join('').slice(0, 2)}</div>
-)
+// Shows the person's photo when they have one; falls back to initials.
+export const Avatar = ({ name, photo }) => photo
+  ? <img className="avatar avatar-img" src={photo} alt={name ?? ''} title={name} />
+  : <div className="avatar">{(name ?? '?').split(' ').map((w) => w[0]).join('').slice(0, 2)}</div>
 
 // In-app photo viewer. img: { url, name, download: boolean }
 export function Lightbox({ img, onClose }) {

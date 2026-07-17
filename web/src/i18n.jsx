@@ -223,3 +223,61 @@ export function LanguagePicker({ compact }) {
     </div>
   )
 }
+
+// Inline SVG flags - emoji flags don't render on Windows, so tiny SVGs it is.
+export function Flag({ code }) {
+  if (code === 'fr') return (
+    <svg viewBox="0 0 30 20" className="flag" aria-hidden="true">
+      <rect width="10" height="20" fill="#0055A4" />
+      <rect x="10" width="10" height="20" fill="#fff" />
+      <rect x="20" width="10" height="20" fill="#EF4135" />
+    </svg>
+  )
+  if (code === 'rw') return (
+    <svg viewBox="0 0 30 20" className="flag" aria-hidden="true">
+      <rect width="30" height="10" fill="#00A1DE" />
+      <rect y="10" width="30" height="5" fill="#FAD201" />
+      <rect y="15" width="30" height="5" fill="#20603D" />
+      <circle cx="24" cy="5" r="2.6" fill="#E5BE01" />
+    </svg>
+  )
+  return ( // en - simplified Union Jack
+    <svg viewBox="0 0 30 20" className="flag" aria-hidden="true">
+      <rect width="30" height="20" fill="#012169" />
+      <path d="M0,0 L30,20 M30,0 L0,20" stroke="#fff" strokeWidth="4" />
+      <path d="M0,0 L30,20 M30,0 L0,20" stroke="#C8102E" strokeWidth="1.8" />
+      <path d="M15,0 V20 M0,10 H30" stroke="#fff" strokeWidth="6.5" />
+      <path d="M15,0 V20 M0,10 H30" stroke="#C8102E" strokeWidth="3.5" />
+    </svg>
+  )
+}
+
+// Flag dropdown used on the public/login pages.
+export function LanguageDropdown() {
+  const { lang, setLang } = useT()
+  const [open, setOpen] = useState(false)
+  const current = LANGS.find((l) => l.code === lang) ?? LANGS[0]
+  return (
+    <div className="lang-dd">
+      <button type="button" className="lang-dd-btn"
+        onClick={() => setOpen((o) => !o)}
+        onBlur={() => setTimeout(() => setOpen(false), 150)}>
+        <Flag code={current.code} />
+        {current.code.toUpperCase()}
+        <svg width="10" height="10" viewBox="0 0 10 10" aria-hidden="true">
+          <path d="M1.5 3.5 L5 7 L8.5 3.5" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
+        </svg>
+      </button>
+      {open && (
+        <div className="lang-dd-menu">
+          {LANGS.map((l) => (
+            <button type="button" key={l.code} className={l.code === lang ? 'on' : ''}
+              onMouseDown={(e) => { e.preventDefault(); setLang(l.code); setOpen(false) }}>
+              <Flag code={l.code} /> {l.label}
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}

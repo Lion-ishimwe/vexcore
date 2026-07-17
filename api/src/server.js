@@ -19,6 +19,23 @@ const app = express()
 app.use(cors())
 app.use(express.json({ limit: '2mb' }))
 
+// Lightweight performance tracker for the Super Admin system panel: every API
+// request is timed on the way out; the last 500 samples give avg + p95.
+const perf = { count: 0, totalMs: 0, samples: [], startedAt: Date.now() }
+app.set('perf', perf)
+app.use((req, res, next) => {
+  const t0 = process.hrtime.bigint()
+  res.on('finish', () => {
+    if (!req.originalUrl.startsWith('/api/')) return
+    const ms = Number(process.hrtime.bigint() - t0) / 1e6
+    perf.count += 1
+    perf.totalMs += ms
+    perf.samples.push(ms)
+    if (perf.samples.length > 500) perf.samples.shift()
+  })
+  next()
+})
+
 app.use('/uploads', express.static(path.resolve('uploads')))
 
 app.use('/api/auth', authRoutes)

@@ -1,12 +1,27 @@
 import { Router } from 'express'
 import bcrypt from 'bcryptjs'
 import crypto from 'node:crypto'
+import path from 'node:path'
+import fs from 'node:fs'
+import multer from 'multer'
 import { generateSecret, verifySync, generateURI } from 'otplib'
 import QRCode from 'qrcode'
 import { db, audit } from '../db.js'
 import { settingsOf } from '../auth.js'
 
 const r = Router()
+
+const UPLOADS = path.resolve('uploads')
+fs.mkdirSync(UPLOADS, { recursive: true })
+export const photoUpload = multer({
+  storage: multer.diskStorage({
+    destination: UPLOADS,
+    filename: (_req, file, cb) =>
+      cb(null, Date.now() + '-' + Math.round(Math.random() * 1e6) + path.extname(file.originalname || '.jpg')),
+  }),
+  limits: { fileSize: 8 * 1024 * 1024 },
+  fileFilter: (_req, file, cb) => cb(null, !!file.mimetype?.startsWith('image')),
+})
 
 const sha256 = (s) => crypto.createHash('sha256').update(s).digest('hex')
 // Backup codes are compared case-insensitively, ignoring dashes/spaces.
@@ -41,6 +56,21 @@ r.patch('/profile', async (req, res) => {
   const user = await db.user.update({ where: { id: req.user.id }, data })
   await logFor(req, 'account.profile', `${req.user.email} updated their profile`)
   res.json({ name: user.name, email: user.email, language: user.language })
+})
+
+// ---- Profile photo (optional - initials avatar otherwise) ----
+
+r.post('/photo', photoUpload.single('photo'), async (req, res) => {
+  if (!req.file) return res.status(400).json({ error: 'Pick an image file' })
+  await db.user.update({ where: { id: req.user.id }, data: { photo: req.file.filename } })
+  await logFor(req, 'account.photo', `${req.user.name} updated their photo`)
+  res.json({ photo: '/uploads/' + req.file.filename })
+})
+
+r.delete('/photo', async (req, res) => {
+  await db.user.update({ where: { id: req.user.id }, data: { photo: null } })
+  await logFor(req, 'account.photo', `${req.user.name} removed their photo`)
+  res.json({ photo: null })
 })
 
 // ---- Password ----

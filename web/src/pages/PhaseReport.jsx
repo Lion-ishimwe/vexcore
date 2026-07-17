@@ -94,11 +94,6 @@ function DailyChart({ daily, showMoney, cur }) {
           )
         })}
       </svg>
-      <div className="small muted" style={{ marginTop: 2 }}>
-        {showMoney
-          ? 'Daily spend - wages (amber) and materials (blue); the number above each bar is workers on site.'
-          : 'Workers on site per day.'}
-      </div>
     </div>
   )
 }

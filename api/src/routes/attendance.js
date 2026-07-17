@@ -4,6 +4,7 @@ import QRCode from 'qrcode'
 import { db, audit } from '../db.js'
 import { requireCap, settingsOf, can } from '../auth.js'
 import { scopedProjectIds, projectScopeWhere, inScope } from '../scope.js'
+import { photoUpload } from './account.js'
 
 const r = Router()
 
@@ -125,7 +126,7 @@ async function rolloverStale(client) {
 const SESSION_INCLUDE = {
   project: { select: { name: true } },
   phase: { select: { name: true } },
-  records: { include: { worker: { select: { id: true, name: true, type: true, dailyRate: true } } } },
+  records: { include: { worker: { select: { id: true, name: true, type: true, dailyRate: true, photo: true } } } },
 }
 
 function shapeSession(s, client) {
@@ -136,6 +137,7 @@ function shapeSession(s, client) {
     windows: windowsInfo(client),
     records: s.records.map(rec => ({
       workerId: rec.workerId, name: rec.worker.name, type: rec.worker.type,
+      photo: rec.worker.photo ? '/uploads/' + rec.worker.photo : null,
       clockInAt: rec.clockInAt, clockOutAt: rec.clockOutAt,
       inMethod: rec.inMethod, outMethod: rec.outMethod, inBy: rec.inBy, outBy: rec.outBy,
     })),
@@ -176,8 +178,26 @@ r.get('/workers', requireCap('attendance.view'), async (req, res) => {
   res.json(workers.map(w => ({
     id: w.id, name: w.name, type: w.type, phone: w.phone,
     cardId: w.cardId, dailyRate: w.dailyRate, active: w.active,
+    photo: w.photo ? '/uploads/' + w.photo : null,
     projectId: w.projectId, projectName: w.project?.name ?? null,
   })))
+})
+
+// Optional worker photo - shown instead of the initials avatar everywhere.
+r.post('/workers/:id/photo', requireCap('workers.manage'), photoUpload.single('photo'), async (req, res) => {
+  const worker = await db.worker.findFirst({ where: { id: +req.params.id, clientId: req.client.id } })
+  if (!worker) return res.status(404).json({ error: 'Worker not found' })
+  if (!req.file) return res.status(400).json({ error: 'Pick an image file' })
+  await db.worker.update({ where: { id: worker.id }, data: { photo: req.file.filename } })
+  await audit(req.client.id, req.user.name, 'worker.photo', worker.name)
+  res.json({ photo: '/uploads/' + req.file.filename })
+})
+
+r.delete('/workers/:id/photo', requireCap('workers.manage'), async (req, res) => {
+  const worker = await db.worker.findFirst({ where: { id: +req.params.id, clientId: req.client.id } })
+  if (!worker) return res.status(404).json({ error: 'Worker not found' })
+  await db.worker.update({ where: { id: worker.id }, data: { photo: null } })
+  res.json({ photo: null })
 })
 
 r.post('/workers', requireCap('workers.manage'), async (req, res) => {
@@ -282,6 +302,7 @@ r.get('/workers/badges', requireCap('attendance.view'), async (req, res) => {
     }
     shaped.push({
       id: w.id, name: w.name, type: w.type, phone: w.phone, cardId,
+      photo: w.photo ? '/uploads/' + w.photo : null,
       projectId: w.projectId, projectName: w.project?.name ?? null,
       qr: await QRCode.toDataURL(cardId, { margin: 1, width: 140 }),
     })
@@ -316,7 +337,7 @@ r.get('/cards', requireCap('attendance.view'), async (req, res) => {
       clientId: req.client.id,
       ...(ids ? { worker: { OR: [{ projectId: null }, { projectId: { in: ids } }] } } : {}),
     },
-    include: { worker: { select: { name: true, type: true, phone: true, active: true, projectId: true, project: { select: { name: true } } } } },
+    include: { worker: { select: { name: true, type: true, phone: true, active: true, photo: true, projectId: true, project: { select: { name: true } } } } },
     orderBy: { createdAt: 'desc' },
     take: 200,
   })
@@ -325,6 +346,7 @@ r.get('/cards', requireCap('attendance.view'), async (req, res) => {
     shaped.push({
       id: i.id, workerId: i.workerId, cardId: i.cardId,
       name: i.worker.name, type: i.worker.type, phone: i.worker.phone, active: i.worker.active,
+      photo: i.worker.photo ? '/uploads/' + i.worker.photo : null,
       projectId: i.worker.projectId, projectName: i.worker.project?.name ?? null,
       issuedBy: i.issuedBy, createdAt: i.createdAt,
       qr: await QRCode.toDataURL(i.cardId, { margin: 1, width: 140 }),
@@ -648,6 +670,7 @@ r.get('/report', requireCap('attendance.view'), async (req, res) => {
       if (!rec.clockInAt) continue
       const row = rows[rec.workerId] ??= {
         workerId: rec.workerId, name: rec.worker.name, type: rec.worker.type,
+        photo: rec.worker.photo ? '/uploads/' + rec.worker.photo : null,
         days: {}, totalHours: 0, daysPresent: 0, totalPay: 0,
       }
       const hours = rec.clockOutAt
@@ -687,9 +710,28 @@ r.get('/report', requireCap('attendance.view'), async (req, res) => {
   }
   const shaped = Object.values(rows).sort((a, b) => a.name.localeCompare(b.name))
   if (!showMoney) for (const row of shaped) delete row.totalPay
+
+  // Present vs absent: how many of the active workers in scope showed up,
+  // per day and over the whole range.
+  const totalWorkers = await db.worker.count({
+    where: {
+      clientId: req.client.id, active: true,
+      ...(req.query.projectId
+        ? { OR: [{ projectId: null }, { projectId: +req.query.projectId }] }
+        : projectScopeWhere(ids)),
+    },
+  })
+  const dayTotals = {}
+  for (const day of days) {
+    const present = shaped.filter(row => row.days[day]).length
+    dayTotals[day] = { present, absent: Math.max(0, totalWorkers - present) }
+  }
+  const presentTotal = shaped.length
   res.json({
     from: from.toISOString().slice(0, 10), to: to.toISOString().slice(0, 10),
     days, money: showMoney, rows: shaped,
+    totalWorkers, dayTotals,
+    presentTotal, absentTotal: Math.max(0, totalWorkers - presentTotal),
   })
 })
 

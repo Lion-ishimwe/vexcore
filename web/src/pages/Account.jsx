@@ -6,9 +6,11 @@ import {
 import { api } from '../api.js'
 import { useAuth } from '../auth.jsx'
 import { useT, LanguagePicker } from '../i18n.jsx'
-import { Field, ErrorNote } from '../ui.jsx'
+import { Field, ErrorNote, Avatar } from '../ui.jsx'
 
-export default function Account() {
+// section: 'all' (standalone page) | 'profile' | 'security' - the latter two
+// let the admin Settings tabs embed the same cards without duplication.
+export default function Account({ section = 'all' }) {
   const { user, client, updateUser, can } = useAuth()
   const { t } = useT()
   const nav = useNavigate()
@@ -38,6 +40,23 @@ export default function Account() {
     const r = await api('/account/profile', { method: 'PATCH', body: profile })
     updateUser(r)
     setProfileMsg({ ok: 'Profile updated' })
+  })
+
+  const uploadPhoto = async (file) => {
+    setBusy(true); setProfileMsg(null)
+    try {
+      const form = new FormData()
+      form.append('photo', file)
+      const r = await api('/account/photo', { method: 'POST', form })
+      updateUser({ photo: r.photo })
+      setProfileMsg({ ok: 'Photo updated' })
+    } catch (err) { setProfileMsg({ error: err.message }) } finally { setBusy(false) }
+  }
+
+  const removePhoto = run(setProfileMsg, async () => {
+    await api('/account/photo', { method: 'DELETE' })
+    updateUser({ photo: null })
+    setProfileMsg({ ok: 'Photo removed - your initials show instead' })
   })
 
   const changePassword = run(setPwMsg, async () => {
@@ -85,13 +104,27 @@ export default function Account() {
     msg.error ? <ErrorNote error={msg.error} /> : <div className="ok-note">{msg.ok}</div>
   ) : null
 
-  return (
-    <div className="grid grid-2">
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+  const profileCards = (
+    <>
         <div className="card">
           <h3 style={{ display: 'flex', alignItems: 'center', gap: 7 }}><UserRound size={14} /> {t('account.profile')}</h3>
           <form onSubmit={saveProfile} className="mt">
             <Note msg={profileMsg} />
+            <div style={{ display: 'flex', alignItems: 'center', gap: 14, marginBottom: 14 }}>
+              <label className="avatar-upload" title="Click to upload a photo" style={{ transform: 'scale(1.5)', transformOrigin: 'left center' }}>
+                <Avatar name={user.name} photo={user.photo} />
+                <input type="file" accept="image/*"
+                  onChange={(e) => { if (e.target.files[0]) uploadPhoto(e.target.files[0]); e.target.value = '' }} />
+              </label>
+              <div style={{ flex: 1, display: 'flex', gap: 8 }}>
+                <label className="btn ghost sm" style={{ cursor: 'pointer' }}>
+                  Upload photo
+                  <input type="file" accept="image/*" hidden
+                    onChange={(e) => { if (e.target.files[0]) uploadPhoto(e.target.files[0]); e.target.value = '' }} />
+                </label>
+                {user.photo && <button type="button" className="btn ghost sm" onClick={removePhoto}>Remove</button>}
+              </div>
+            </div>
             <Field label="Full name">
               <input value={profile.name} onChange={(e) => setProfile((p) => ({ ...p, name: e.target.value }))} required />
             </Field>
@@ -107,7 +140,10 @@ export default function Account() {
           <p className="small muted" style={{ margin: '6px 0 12px' }}>{t('account.languageSub')}</p>
           <LanguagePicker />
         </div>
+    </>
+  )
 
+  const passwordCard = (
         <div className="card">
           <h3 style={{ display: 'flex', alignItems: 'center', gap: 7 }}><KeyRound size={14} /> {t('account.password')}</h3>
           <form onSubmit={changePassword} className="mt">
@@ -126,8 +162,9 @@ export default function Account() {
             <button className="btn" disabled={busy}>Change password</button>
           </form>
         </div>
-      </div>
+  )
 
+  const twoFACard = (
       <div className="card" style={{ alignSelf: 'start' }}>
         <h3 style={{ display: 'flex', alignItems: 'center', gap: 7 }}>
           {user.totpEnabled ? <ShieldCheck size={14} color="var(--green)" /> : <ShieldOff size={14} />}
@@ -223,6 +260,21 @@ export default function Account() {
           )}
         </div>
       </div>
+  )
+
+  if (section === 'profile')
+    return <div style={{ display: 'flex', flexDirection: 'column', gap: 16, maxWidth: 620 }}>{profileCards}</div>
+
+  if (section === 'security')
+    return <div className="grid grid-2">{passwordCard}{twoFACard}</div>
+
+  return (
+    <div className="grid grid-2">
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+        {profileCards}
+        {passwordCard}
+      </div>
+      {twoFACard}
     </div>
   )
 }

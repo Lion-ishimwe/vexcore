@@ -13,17 +13,30 @@ export const MOMO = {
   name: process.env.MOMO_NAME || 'Bridge Construction Ltd',
 }
 
+// Paid subscriptions get a short grace window: when coverage ends, the client
+// keeps working for GRACE_DAYS extra days under a renewal warning before the
+// workspace locks. Applies to every paid plan - bought month by month or for
+// several months at once. Trials still lock the moment they end.
+export const GRACE_DAYS = 2
+
 export function subscriptionOf(client) {
   if (!client) return null
   const now = Date.now()
   let expiresAt = null
   let expired = false
+  let inGrace = false
+  let graceEndsAt = null
   if (client.status === 'TRIAL') {
     expiresAt = client.trialEndsAt
     expired = !!client.trialEndsAt && new Date(client.trialEndsAt).getTime() < now
   } else if (client.status === 'ACTIVE') {
     expiresAt = client.paidUntil
-    expired = !!client.paidUntil && new Date(client.paidUntil).getTime() < now
+    if (client.paidUntil) {
+      const end = new Date(client.paidUntil).getTime()
+      graceEndsAt = new Date(end + GRACE_DAYS * 86400000)
+      expired = now > graceEndsAt.getTime() // locks only after the grace window
+      inGrace = now > end && !expired
+    }
   }
   return {
     status: client.status,
@@ -32,6 +45,9 @@ export function subscriptionOf(client) {
     paidUntil: client.paidUntil,
     expiresAt,
     expired,
+    inGrace,
+    graceEndsAt,
+    graceDays: GRACE_DAYS,
   }
 }
 

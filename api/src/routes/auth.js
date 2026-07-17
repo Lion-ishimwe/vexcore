@@ -13,6 +13,7 @@ function publicUser(u) {
   return {
     id: u.id, name: u.name, email: u.email, role: u.role, clientId: u.clientId,
     totpEnabled: !!u.totpEnabled, language: u.language ?? 'en',
+    photo: u.photo ? '/uploads/' + u.photo : null,
   }
 }
 
@@ -22,7 +23,7 @@ function sessionPayload(user, client) {
     user: publicUser(user),
     client: client ? {
       id: client.id, company: client.company, currency: client.currency, tin: client.tin,
-      location: client.location, country: client.country,
+      location: client.location, country: client.country, contact: client.contact,
       status: client.status, trialEndsAt: client.trialEndsAt, settings: settingsOf(client),
     } : null,
     subscription: subscriptionOf(client),

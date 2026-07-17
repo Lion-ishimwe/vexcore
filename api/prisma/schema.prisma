@@ -71,6 +71,7 @@ model User {
   passwordHash String
   role         String   // SUPER | CLIENT | SENIOR | SITE | STOCK | GUEST
   language     String   @default("en") // en | fr | rw
+  photo        String?  // optional profile photo (uploads/ filename); initials otherwise
   totpSecret   String?
   totpEnabled  Boolean  @default(false)
   backupCodes  Json? // sha256 hashes of unused one-time backup codes
@@ -322,6 +323,12 @@ model DemoBooking {
   phone     String?
   teamSize  String?
   interests Json?
+  seenAt    DateTime? // when the Super Admin acknowledged the booking popup
+  // Demo lifecycle tracking (Super Admin › Demos tab)
+  status    String    @default("SCHEDULED") // SCHEDULED | DONE | NO_SHOW | CANCELED
+  heldAt    DateTime? // when it was marked DONE
+  duration  Int?      // minutes the demo actually took
+  note      String?   @db.Text // outcome notes
   createdAt DateTime @default(now())
 }
 
@@ -364,6 +371,7 @@ model Worker {
   name      String
   type      String   @default("builder") // builder | helper
   phone     String?
+  photo     String?  // optional worker photo (uploads/ filename); initials otherwise
   cardId    String? // RFID/NFC/QR badge id - enrolled once, tapped daily
   dailyRate Int?
   active    Boolean  @default(true)

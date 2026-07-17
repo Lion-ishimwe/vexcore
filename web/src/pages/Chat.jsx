@@ -217,7 +217,7 @@ export default function Chat() {
           {others.map((m) => (
             <button className={`convo-row ${String(convo) === String(m.id) ? 'active' : ''}`} key={m.id}
               onClick={() => setConvo(m.id)}>
-              <Avatar name={m.name} />
+              <Avatar name={m.name} photo={m.photo} />
               <div><b>{m.name}</b><span>{ROLE_LABEL[m.role] ?? m.role}</span></div>
               {unread(m.id, threadLast(m.id)) && <i className="unread-dot" />}
             </button>
@@ -227,7 +227,7 @@ export default function Chat() {
         <div className="card chat-main">
           <div className="flex-between chat-head">
             <div className="chat-title">
-              {partner ? <Avatar name={partner.name} /> : <span className="convo-all-icon"><Users size={15} /></span>}
+              {partner ? <Avatar name={partner.name} photo={partner.photo} /> : <span className="convo-all-icon"><Users size={15} /></span>}
               <div>
                 <b>{partner ? partner.name : t('chat.everyone')}</b>
                 <span>{partner
@@ -242,7 +242,7 @@ export default function Chat() {
             {messages === null && <div className="spin">Loading…</div>}
             {messages?.map((m) => (
               <div className={`msg ${m.mine ? 'me' : ''}`} key={m.id}>
-                <Avatar name={m.from} />
+                <Avatar name={m.from} photo={m.fromPhoto} />
                 <div className="msg-bubble">
                   <div className="msg-head">
                     <b>{m.from}</b> · {ROLE_LABEL[m.role] ?? m.role} · {new Date(m.createdAt).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' })}
@@ -316,7 +316,7 @@ export default function Chat() {
             {others.map((m) => (
               <label className="invite-row" key={m.id}>
                 <input type="checkbox" checked={invited.includes(m.id)} onChange={() => toggleInvite(m.id)} />
-                <Avatar name={m.name} />
+                <Avatar name={m.name} photo={m.photo} />
                 <div>
                   <b>{m.name}</b>
                   <span>{ROLE_LABEL[m.role] ?? m.role}</span>

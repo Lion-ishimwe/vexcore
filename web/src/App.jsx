@@ -1,9 +1,9 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { Routes, Route, NavLink, Navigate, useLocation, useNavigate } from 'react-router-dom'
 import {
   LayoutDashboard, Building2, ClipboardList, Camera, Package, MessageSquare,
   Users, FileText, Settings as SettingsIcon, Shield, LogOut, FolderOpen, UserCheck,
-  Menu, Plus, X, CreditCard,
+  Menu, Plus, X, CreditCard, CalendarDays,
 } from 'lucide-react'
 import { useAuth } from './auth.jsx'
 import { useT, LanguagePicker } from './i18n.jsx'
@@ -30,8 +30,12 @@ import Billing from './pages/Billing.jsx'
 import Team from './pages/Team.jsx'
 import Admin from './pages/Admin.jsx'
 import Companies from './pages/Companies.jsx'
+import Demos from './pages/Demos.jsx'
+import Payments from './pages/Payments.jsx'
+import AdminSettings from './pages/AdminSettings.jsx'
 import Account from './pages/Account.jsx'
-import { setToken } from './api.js'
+import { api, setToken, fmtDate, fmtDay } from './api.js'
+import { Modal } from './ui.jsx'
 
 const NAV = [
   { to: '/', icon: LayoutDashboard, key: 'nav.dashboard', cap: 'dashboard' },
@@ -53,7 +57,8 @@ const TITLE_KEYS = {
   '/updates': 'nav.updates', '/documents': 'nav.documents', '/attendance': 'nav.attendance',
   '/stock': 'nav.stock', '/chat': 'nav.chat', '/team': 'nav.team', '/reports': 'nav.reports',
   '/settings': 'nav.settings', '/billing': 'nav.billing',
-  '/admin': 'Platform Dashboard', '/admin/companies': 'Companies', '/account': 'nav.account',
+  '/admin': 'Platform Dashboard', '/admin/companies': 'Companies', '/admin/demos': 'Demo Bookings',
+  '/admin/payments': 'Subscription Payments', '/admin/settings': 'Settings', '/account': 'nav.account',
 }
 
 // Bottom navigation for phones: the four everyday destinations + the amber
@@ -69,6 +74,45 @@ const MOBILE_SLOTS = [
 const ROLE_LABEL = {
   SUPER: 'Super Admin', CLIENT: 'Admin', SENIOR: 'Senior Engineer',
   SITE: 'Site Engineer', STOCK: 'Stock Manager', GUEST: 'Guest',
+}
+
+// Super Admin popup: new demo bookings from the public site ping here (polled
+// every 30s) and stay until acknowledged - full details, nothing missed.
+function DemoAlerts() {
+  const [alerts, setAlerts] = useState([])
+  useEffect(() => {
+    let on = true
+    const load = () => api('/admin/demo-alerts').then((a) => { if (on) setAlerts(a) }).catch(() => {})
+    load()
+    const t = setInterval(load, 30000)
+    return () => { on = false; clearInterval(t) }
+  }, [])
+  if (!alerts.length) return null
+  const dismiss = async () => {
+    try { await api('/admin/demo-alerts/seen', { method: 'POST', body: { ids: alerts.map((a) => a.id) } }) }
+    catch { /* still unseen server-side - it will pop again on the next poll */ }
+    setAlerts([])
+  }
+  return (
+    <Modal title={`🔔 New demo booking${alerts.length === 1 ? '' : 's'} (${alerts.length})`} onClose={dismiss}>
+      {alerts.map((b) => (
+        <div key={b.id} style={{ border: '1px solid var(--border)', borderRadius: 10, padding: '12px 14px', marginBottom: 10 }}>
+          <b style={{ fontSize: 14.5 }}>{b.name}{b.company ? ` · ${b.company}` : ''}</b>
+          <div className="small" style={{ marginTop: 6, display: 'grid', gap: 3 }}>
+            <span><b>Demo slot:</b> {fmtDate(b.slot)}</span>
+            <span><b>Email:</b> {b.email}</span>
+            {b.phone && <span><b>Phone:</b> {b.phone}</span>}
+            {b.teamSize && <span><b>Team size:</b> {b.teamSize}</span>}
+            {(b.interests ?? []).length > 0 && <span><b>Interested in:</b> {b.interests.join(', ')}</span>}
+            <span className="muted">Booked {fmtDate(b.createdAt)}</span>
+          </div>
+        </div>
+      ))}
+      <button className="btn" style={{ width: '100%', justifyContent: 'center' }} onClick={dismiss}>
+        Got it - mark as seen
+      </button>
+    </Modal>
+  )
 }
 
 function trialLabel(client) {
@@ -124,43 +168,13 @@ export default function App() {
     )
   }
 
-  // Trial ended / subscription lapsed: the whole app locks. The admin gets the
-  // billing page to pay; everyone else is asked to contact their admin.
-  // (Support mode bypasses the lock - the Super Admin must reach locked accounts.)
-  if (!isSuper && !impersonating && subscription?.expired) {
-    return (
-      <div className="expired-wrap">
-        <header className="topbar" style={{ position: 'sticky', top: 0 }}>
-          <img className="logo-mark" src="/logo.png" alt="Bridge logo" style={{ width: 30, height: 30, borderRadius: 7 }} />
-          <h1 style={{ flex: 1 }}>{client?.company}</h1>
-          <span className="badge red">{subscription.status === 'TRIAL' ? 'Trial ended' : 'Subscription expired'}</span>
-          <button className="btn ghost sm" onClick={logout} style={{ marginLeft: 10 }}><LogOut size={13} /> {t('nav.logout')}</button>
-        </header>
-        <div className="content" style={{ maxWidth: 1060, margin: '0 auto', width: '100%' }}>
-          {can('billing') ? (
-            <>
-              <div className="error-note" style={{ marginBottom: 16 }}>
-                {subscription.status === 'TRIAL'
-                  ? 'Your free trial has ended. Subscribe below to unlock your workspace - all your data is safe.'
-                  : 'Your subscription has expired. Renew below to unlock your workspace - all your data is safe.'}
-              </div>
-              <Billing />
-            </>
-          ) : (
-            <div className="locked">
-              <h2>Subscription expired</h2>
-              <p className="muted">Ask your admin to renew the subscription to get back in.</p>
-            </div>
-          )}
-        </div>
-      </div>
-    )
-  }
-
   const nav = isSuper
     ? [
         { to: '/admin', icon: LayoutDashboard, label: 'Dashboard', cap: null },
         { to: '/admin/companies', icon: Building2, label: 'Companies', cap: null },
+        { to: '/admin/payments', icon: CreditCard, label: 'Payments', cap: null },
+        { to: '/admin/demos', icon: CalendarDays, label: 'Demos', cap: null },
+        { to: '/admin/settings', icon: SettingsIcon, label: 'Settings', cap: null },
       ]
     : NAV.filter((n) => can(n.cap))
 
@@ -206,15 +220,45 @@ export default function App() {
           <div className="topbar-right">
             {!isSuper && <WeatherWidget />}
             {!isSuper && <span className="trial-chip desk-only">{trialLabel(client)}</span>}
-            <NavLink to="/account" className="account-link" title={t('nav.account')}>
+            {/* Accounts live inside Settings: /admin/settings for the platform
+                operator, /settings (My Account / Security tabs) for client admins */}
+            <NavLink to={isSuper ? '/admin/settings' : can('settings.edit') ? '/settings' : '/account'}
+              className="account-link" title={t('nav.account')}>
               <span className="small muted desk-only">{user.name} · {ROLE_LABEL[user.role]}</span>
-              <div className="avatar">
-                {user.name.split(' ').map((w) => w[0]).join('').slice(0, 2)}
-              </div>
+              {user.photo
+                ? <img className="avatar avatar-img" src={user.photo} alt={user.name} />
+                : <div className="avatar">{user.name.split(' ').map((w) => w[0]).join('').slice(0, 2)}</div>}
             </NavLink>
             <button className="btn ghost sm desk-only" onClick={logout}><LogOut size={13} /> {t('nav.logout')}</button>
           </div>
         </header>
+
+        {/* Read-only lockdown: trial/subscription expired (grace included).
+            Everything stays visible and downloadable as usual - the server
+            refuses any change until payment. (Support mode bypasses this.) */}
+        {!isSuper && !impersonating && subscription?.expired && (
+          <div className="grace-banner locked-banner">
+            <span>
+              🔒 <b>{subscription.status === 'TRIAL' ? 'Your free trial has ended' : 'Your subscription has expired'}</b> - the
+              workspace is now <b>view-only</b>. You can see and download everything as usual, but nothing can
+              be added or changed until {can('billing') ? 'you renew' : 'your admin renews'}. All your data is safe.
+            </span>
+            {can('billing') && <NavLink className="btn sm" to="/billing">Pay & unlock</NavLink>}
+          </div>
+        )}
+
+        {/* Grace window: coverage ended, but the workspace stays open for
+            subscription.graceDays extra days under this renewal warning. */}
+        {!isSuper && !impersonating && subscription?.inGrace && (
+          <div className="grace-banner">
+            <span>
+              ⚠ Your <b>{subscription.plan ?? ''} subscription ended {fmtDay(subscription.paidUntil)}</b> - the
+              workspace locks {fmtDay(subscription.graceEndsAt)} at the latest
+              ({Math.max(1, Math.ceil((new Date(subscription.graceEndsAt) - Date.now()) / 86400000))} day{Math.ceil((new Date(subscription.graceEndsAt) - Date.now()) / 86400000) > 1 ? 's' : ''} left). Renew now to keep working without interruption.
+            </span>
+            {can('billing') && <NavLink className="btn sm" to="/billing">Renew now</NavLink>}
+          </div>
+        )}
 
         <div className="content">
           <Routes>
@@ -222,6 +266,9 @@ export default function App() {
               <>
                 <Route path="/admin" element={<Admin />} />
                 <Route path="/admin/companies" element={<Companies />} />
+                <Route path="/admin/demos" element={<Demos />} />
+                <Route path="/admin/payments" element={<Payments />} />
+                <Route path="/admin/settings" element={<AdminSettings />} />
                 <Route path="/account" element={<Account />} />
                 <Route path="*" element={<Navigate to="/admin" />} />
               </>
@@ -246,6 +293,8 @@ export default function App() {
             )}
           </Routes>
         </div>
+
+        {isSuper && <DemoAlerts />}
 
         {/* Phone bottom navigation - the design board's ENTER flow, shipped */}
         {!isSuper && (
@@ -277,7 +326,9 @@ export default function App() {
             <div className="more-sheet" onClick={(e) => e.stopPropagation()}>
               <div className="sheet-grab" />
               <div className="more-head">
-                <div className="avatar">{user.name.split(' ').map((w) => w[0]).join('').slice(0, 2)}</div>
+                {user.photo
+                  ? <img className="avatar avatar-img" src={user.photo} alt={user.name} />
+                  : <div className="avatar">{user.name.split(' ').map((w) => w[0]).join('').slice(0, 2)}</div>}
                 <div style={{ flex: 1 }}>
                   <b>{user.name}</b>
                   <span className="small muted" style={{ display: 'block' }}>{ROLE_LABEL[user.role]} · {client?.company}</span>

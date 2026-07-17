@@ -282,6 +282,13 @@ r.patch('/phases/:id', requireCap('phases.edit'), async (req, res) => {
   if (['active', 'todo'].includes(data.status) && phase.status === 'done') {
     data.signedOffAt = null
     data.signedOffBy = null
+    // The phase is no longer complete, and the dashboard's phase-completion
+    // bars read the stored percent - step it back down. Phases with a
+    // checklist recompute from their insights; manual phases drop to 90%
+    // (In progress) or 0% (To do) and the engineer sets the real figure
+    // from the board's percent input.
+    if (phase.insights.length) data.percent = derivedPercent(phase)
+    else data.percent = data.status === 'active' ? 90 : 0
     const label = data.status === 'active' ? 'In progress' : 'To do'
     await audit(req.client.id, req.user.name, 'phase.reopened', `${phase.name} → ${label}`)
     const owners = await db.user.findMany({
@@ -535,7 +542,7 @@ r.get('/updates', requireCap('updates.view'), async (req, res) => {
   if (req.user.role === 'CLIENT' || req.user.role === 'GUEST') where.forwarded = true
   const updates = await db.dailyUpdate.findMany({
     where,
-    include: { media: true, materials: true, user: { select: { name: true } }, project: { select: { name: true } }, phase: { select: { name: true } } },
+    include: { media: true, materials: true, user: { select: { name: true, photo: true } }, project: { select: { name: true } }, phase: { select: { name: true } } },
     orderBy: { createdAt: 'desc' },
     take: 50,
   })
@@ -602,7 +609,8 @@ r.get('/updates', requireCap('updates.view'), async (req, res) => {
   }
 
   res.json(updates.map(u => ({
-    id: u.id, by: u.user.name, project: u.project.name, phase: u.phase?.name ?? null,
+    id: u.id, by: u.user.name, byPhoto: u.user.photo ? '/uploads/' + u.user.photo : null,
+    project: u.project.name, phase: u.phase?.name ?? null,
     builders: u.builders, helpers: u.helpers, note: u.note, geotag: u.geotag,
     forwarded: u.forwarded, createdAt: u.createdAt,
     media: u.media.map(m => ({ id: m.id, kind: m.kind, url: '/uploads/' + path.basename(m.path) })),

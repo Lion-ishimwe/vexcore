@@ -3,7 +3,7 @@ import { Link, useLocation, useNavigate } from 'react-router-dom'
 import { Copy, Download, CheckCircle2 } from 'lucide-react'
 import { api } from '../api.js'
 import { useAuth } from '../auth.jsx'
-import { useT, LanguagePicker } from '../i18n.jsx'
+import { useT, LanguageDropdown } from '../i18n.jsx'
 import { PubNav, PubFoot } from './GetStarted.jsx'
 import { Field, ErrorNote, useForm } from '../ui.jsx'
 
@@ -118,13 +118,16 @@ export default function Login() {
       <PubNav />
       <div className="auth-wrap">
         <div className="auth-card">
-          <h2>
-            {mode === 'login' ? t('login.title') :
-             mode === 'totp' ? 'Two-step verification' :
-             mode === 'forgot' ? 'Forgot password' :
-             mode === 'setup2fa' ? 'Set up two-factor authentication' :
-             'Set a new password'}
-          </h2>
+          <div className="flex-between" style={{ alignItems: 'flex-start', gap: 12 }}>
+            <h2>
+              {mode === 'login' ? t('login.title') :
+               mode === 'totp' ? 'Two-step verification' :
+               mode === 'forgot' ? 'Forgot password' :
+               mode === 'setup2fa' ? 'Set up two-factor authentication' :
+               'Set a new password'}
+            </h2>
+            <LanguageDropdown />
+          </div>
           <p className="sub muted small">
             {mode === 'login' ? t('login.sub') :
              mode === 'totp' ? `Enter the code from your authenticator app - or one of your backup codes - to finish logging in as ${v.email}.` :
@@ -133,7 +136,6 @@ export default function Login() {
              'Reset link generated - choose a new password.'}
           </p>
           <ErrorNote error={error} />
-          <LanguagePicker compact />
 
           {mode === 'login' && (
             <form onSubmit={submit}>

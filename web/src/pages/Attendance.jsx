@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
 import {
-  UserCheck, LogIn, LogOut, Lock, Printer, Download, Plus, Pencil, CreditCard,
+  UserCheck, UserX, LogIn, LogOut, Lock, Printer, Download, Plus, Pencil, CreditCard,
   MonitorSmartphone, HardHat, Users, BadgeCheck, Hand, FileSpreadsheet, Upload, Play,
 } from 'lucide-react'
 import { api, fmtDay, fmtMoney } from '../api.js'
@@ -199,6 +199,13 @@ export default function Attendance() {
     loadWorkers()
   })
 
+  const uploadWorkerPhoto = act(async (w, file) => {
+    const form = new FormData()
+    form.append('photo', file)
+    await api(`/attendance/workers/${w.id}/photo`, { method: 'POST', form })
+    loadWorkers()
+  })
+
   const assignCard = (w) => {
     const cardId = window.prompt(`Card / badge id for ${w.name} - click OK then tap the card if using a USB reader`, w.cardId ?? '')
     if (cardId === null) return
@@ -234,12 +241,17 @@ export default function Attendance() {
   const downloadCard = async (c) => {
     const company = (issued ?? badges)?.company ?? ''
     const contact = (issued ?? badges)?.contact ?? ''
-    const qrImg = await new Promise((resolve, reject) => {
+    const loadImg = (src) => new Promise((resolve, reject) => {
       const im = new Image()
       im.onload = () => resolve(im)
       im.onerror = reject
-      im.src = c.qr
+      im.src = src
     })
+    const qrImg = await loadImg(c.qr)
+    // Worker photo (optional) - drawn large on the front so the person is
+    // recognisable at the gate. Falls back to initials if it fails to load.
+    let photoImg = null
+    if (c.photo) { try { photoImg = await loadImg(c.photo) } catch { photoImg = null } }
     const W = 856, H = 540, GAP = 40, R = 24
     const canvas = document.createElement('canvas')
     canvas.width = W
@@ -301,20 +313,33 @@ export default function Attendance() {
     // divider under header
     ctx.strokeStyle = 'rgba(28,36,48,.12)'; ctx.lineWidth = 2
     ctx.beginPath(); ctx.moveTo(32, 100); ctx.lineTo(W - 32, 100); ctx.stroke()
-    // identity
-    ctx.fillStyle = '#fef3c7'; rr(44, 150, 76, 76, 16); ctx.fill()
-    ctx.strokeStyle = '#f59e0b'; ctx.lineWidth = 2; rr(44, 150, 76, 76, 16); ctx.stroke()
-    ctx.fillStyle = '#92400e'; ctx.font = F(800, 26); ctx.textAlign = 'center'
-    ctx.fillText(c.name.split(' ').map((p) => p[0]).join('').slice(0, 2), 82, 190)
+    // identity - a real photo when the worker has one, initials otherwise
+    let textX = 142
+    if (photoImg) {
+      // Bus-pass proportions: the portrait fills the card body's left side.
+      const bx = 44, by = 116, bw = 180, bh = 224
+      ctx.save(); rr(bx, by, bw, bh, 12); ctx.clip()
+      const scale = Math.max(bw / photoImg.width, bh / photoImg.height)
+      const sw = bw / scale, sh = bh / scale
+      ctx.drawImage(photoImg, (photoImg.width - sw) / 2, (photoImg.height - sh) / 2, sw, sh, bx, by, bw, bh)
+      ctx.restore()
+      ctx.strokeStyle = '#f59e0b'; ctx.lineWidth = 4; rr(bx, by, bw, bh, 12); ctx.stroke()
+      textX = 248
+    } else {
+      ctx.fillStyle = '#fef3c7'; rr(44, 150, 76, 76, 16); ctx.fill()
+      ctx.strokeStyle = '#f59e0b'; ctx.lineWidth = 2; rr(44, 150, 76, 76, 16); ctx.stroke()
+      ctx.fillStyle = '#92400e'; ctx.font = F(800, 26); ctx.textAlign = 'center'
+      ctx.fillText(c.name.split(' ').map((p) => p[0]).join('').slice(0, 2), 82, 190)
+    }
     ctx.textAlign = 'left'; ctx.fillStyle = '#10151d'; ctx.font = F(800, 33)
-    ctx.fillText(c.name, 142, 180)
+    ctx.fillText(c.name, textX, 180)
     ctx.fillStyle = '#b45309'; ctx.font = F(800, 15)
-    ctx.fillText(spaced('- ' + (c.type === 'helper' ? 'HELPER' : 'BUILDER')), 142, 214)
+    ctx.fillText(spaced('- ' + (c.type === 'helper' ? 'HELPER' : 'BUILDER')), textX, 214)
     if (c.phone) {
       ctx.fillStyle = '#94a3b8'; ctx.font = F(800, 13)
-      ctx.fillText(spaced('TEL'), 44, 292)
+      ctx.fillText(spaced('TEL'), photoImg ? textX : 44, 292)
       ctx.fillStyle = '#374151'; ctx.font = F(600, 21)
-      ctx.fillText(c.phone, 100, 292)
+      ctx.fillText(c.phone, photoImg ? textX + 56 : 100, 292)
     }
     // QR stamp box
     ctx.fillStyle = '#ffffff'; rr(W - 44 - 172, 122, 172, 196, 14); ctx.fill()
@@ -375,6 +400,11 @@ export default function Attendance() {
       row.daysPresent, row.totalHours,
       ...(report.money ? [row.totalPay ?? 0] : []),
     ])
+    if (report.dayTotals) {
+      const pad = report.money ? ['', '', ''] : ['', '']
+      lines.push(['Present', '', ...report.days.map((d) => report.dayTotals[d]?.present ?? 0), ...pad])
+      lines.push(['Absent', '', ...report.days.map((d) => report.dayTotals[d]?.absent ?? 0), ...pad])
+    }
     const csv = [head, ...lines].map((l) => l.map((v) => `"${String(v).replace(/"/g, '""')}"`).join(',')).join('\n')
     const a = document.createElement('a')
     a.href = URL.createObjectURL(new Blob([csv], { type: 'text/csv' }))
@@ -530,7 +560,7 @@ export default function Attendance() {
                       const rec = recById.get(w.id)
                       return (
                         <tr key={w.id}>
-                          <td><div style={{ display: 'flex', alignItems: 'center', gap: 9 }}><Avatar name={w.name} /><b>{w.name}</b></div></td>
+                          <td><div style={{ display: 'flex', alignItems: 'center', gap: 9 }}><Avatar name={w.name} photo={w.photo} /><b>{w.name}</b></div></td>
                           <td><span className="badge gray">{w.type === 'helper' ? <Users size={10} /> : <HardHat size={10} />} {w.type}</span></td>
                           <td>{rec?.clockInAt ? <b style={{ color: 'var(--green)' }}>{hhmm(rec.clockInAt)}</b> : <span className="muted">-</span>}</td>
                           <td>{rec?.clockOutAt ? <b>{hhmm(rec.clockOutAt)}</b> : <span className="muted">-</span>}</td>
@@ -631,7 +661,16 @@ export default function Attendance() {
               <tbody>
                 {workers.filter(matchProj).map((w) => (
                   <tr key={w.id} style={w.active ? {} : { opacity: .5 }}>
-                    <td><div style={{ display: 'flex', alignItems: 'center', gap: 9 }}><Avatar name={w.name} /><b>{w.name}</b></div></td>
+                    <td><div style={{ display: 'flex', alignItems: 'center', gap: 9 }}>
+                      {canWorkers ? (
+                        <label className="avatar-upload" title="Click to set this worker's photo">
+                          <Avatar name={w.name} photo={w.photo} />
+                          <input type="file" accept="image/*"
+                            onChange={(e) => { if (e.target.files[0]) uploadWorkerPhoto(w, e.target.files[0]); e.target.value = '' }} />
+                        </label>
+                      ) : <Avatar name={w.name} photo={w.photo} />}
+                      <b>{w.name}</b>
+                    </div></td>
                     <td className="muted">{w.projectName ?? 'All projects'}</td>
                     <td>{w.type}</td>
                     <td className="muted">{w.phone ?? '-'}</td>
@@ -755,9 +794,11 @@ export default function Attendance() {
                           <span className="idc2-pass">SITE PASS</span>
                         </div>
                         <div className="idc2-body">
+                          {/* Large ID-style portrait so the person is recognisable at a glance */}
+                          {w.photo && <img className="idc2-photo" src={w.photo} alt={w.name} />}
                           <div className="idc2-left">
                             <div className="idc2-namewrap">
-                              <span className="idc2-init">{w.name.split(' ').map((p) => p[0]).join('').slice(0, 2)}</span>
+                              {!w.photo && <span className="idc2-init">{w.name.split(' ').map((p) => p[0]).join('').slice(0, 2)}</span>}
                               <div>
                                 <b>{w.name}</b>
                                 <span className="idc2-role">- {w.type === 'helper' ? 'HELPER' : 'BUILDER'}</span>
@@ -802,6 +843,7 @@ export default function Attendance() {
               {badges.workers.filter(matchProj).map((w) => (
                 <div className="worker-badge" key={w.id}>
                   <div className="wb-head">{badges.company}</div>
+                  {w.photo && <img className="wb-photo" src={w.photo} alt={w.name} />}
                   <b>{w.name}</b>
                   <span className="wb-type">{w.type}{w.phone ? ` · ${w.phone}` : ''}{w.projectName ? ` · ${w.projectName}` : ''}</span>
                   {w.qr ? <img src={w.qr} alt="QR" /> : <div className="wb-nocard">No card assigned</div>}
@@ -851,7 +893,7 @@ export default function Attendance() {
                 <tbody>
                   {issued.cards.filter(matchProj).map((c) => (
                     <tr key={c.id} style={c.active ? {} : { opacity: .55 }}>
-                      <td><div style={{ display: 'flex', alignItems: 'center', gap: 9 }}><Avatar name={c.name} /><b>{c.name}</b></div></td>
+                      <td><div style={{ display: 'flex', alignItems: 'center', gap: 9 }}><Avatar name={c.name} photo={c.photo} /><b>{c.name}</b></div></td>
                       <td className="muted">{c.projectName ?? 'Shared'}</td>
                       <td><span className="badge blue"><CreditCard size={10} /> {c.cardId}</span></td>
                       <td>{c.type}</td>
@@ -861,7 +903,7 @@ export default function Attendance() {
                         <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
                           <button className="btn ghost sm"
                             onClick={() => {
-                              setCardWorker({ id: c.workerId, name: c.name, type: c.type, phone: c.phone, cardId: c.cardId, qr: c.qr })
+                              setCardWorker({ id: c.workerId, name: c.name, type: c.type, phone: c.phone, cardId: c.cardId, qr: c.qr, photo: c.photo })
                               setTab('badges')
                               if (!badges) loadBadges()
                             }}>
@@ -899,6 +941,13 @@ export default function Attendance() {
             <button className="btn" onClick={() => window.print()} disabled={!report}><Printer size={13} /> Print</button>
           </div>
           {report && (
+            <div className="att-sum">
+              <span className="pill gray"><Users size={13} /> {report.totalWorkers} active worker{report.totalWorkers === 1 ? '' : 's'}</span>
+              <span className="pill green"><UserCheck size={13} /> Present: {report.presentTotal}</span>
+              <span className="pill red"><UserX size={13} /> Absent: {report.absentTotal}</span>
+            </div>
+          )}
+          {report && (
             <div className="card table-card" style={{ overflowX: 'auto' }}>
               <table>
                 <thead>
@@ -912,7 +961,12 @@ export default function Attendance() {
                 <tbody>
                   {report.rows.map((row) => (
                     <tr key={row.workerId}>
-                      <td><b>{row.name}</b><div className="small muted">{row.type}</div></td>
+                      <td>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 9 }}>
+                          <Avatar name={row.name} photo={row.photo} />
+                          <div><b>{row.name}</b><div className="small muted">{row.type}</div></div>
+                        </div>
+                      </td>
                       {report.days.map((d) => {
                         const c = row.days[d]
                         return (
@@ -932,6 +986,20 @@ export default function Attendance() {
                     </tr>
                   ))}
                   {!report.rows.length && <tr><td colSpan={report.days.length + (report.money ? 4 : 3)} className="muted">No attendance in this range.</td></tr>}
+                  {report.rows.length > 0 && (
+                    <>
+                      <tr>
+                        <td className="sum-present">Present</td>
+                        {report.days.map((d) => <td key={d}><span className="sum-present">{report.dayTotals?.[d]?.present ?? 0}</span></td>)}
+                        <td colSpan={report.money ? 3 : 2} />
+                      </tr>
+                      <tr>
+                        <td className="sum-absent">Absent</td>
+                        {report.days.map((d) => <td key={d}><span className="sum-absent">{report.dayTotals?.[d]?.absent ?? 0}</span></td>)}
+                        <td colSpan={report.money ? 3 : 2} />
+                      </tr>
+                    </>
+                  )}
                   {report.money && report.rows.length > 0 && (
                     <tr>
                       <td colSpan={report.days.length + 3} style={{ textAlign: 'right' }}><b>Total wages</b></td>
