@@ -18,6 +18,7 @@ import Dashboard from './pages/Dashboard.jsx'
 import Projects from './pages/Projects.jsx'
 import Kanban from './pages/Kanban.jsx'
 import PhaseReport from './pages/PhaseReport.jsx'
+import Schedule from './pages/Schedule.jsx'
 import Updates from './pages/Updates.jsx'
 import Documents from './pages/Documents.jsx'
 import Attendance from './pages/Attendance.jsx'
@@ -41,6 +42,7 @@ const NAV = [
   { to: '/', icon: LayoutDashboard, key: 'nav.dashboard', cap: 'dashboard' },
   { to: '/projects', icon: Building2, key: 'nav.projects', cap: 'projects.view' },
   { to: '/phases', icon: ClipboardList, key: 'nav.phases', cap: 'phases.view' },
+  { to: '/schedule', icon: CalendarDays, key: 'Schedule', cap: 'schedule.view' },
   { to: '/updates', icon: Camera, key: 'nav.updates', cap: 'updates.view' },
   { to: '/documents', icon: FolderOpen, key: 'nav.documents', cap: 'docs.view' },
   { to: '/attendance', icon: UserCheck, key: 'nav.attendance', cap: 'attendance.view' },
@@ -53,7 +55,7 @@ const NAV = [
 ]
 
 const TITLE_KEYS = {
-  '/': 'nav.dashboard', '/projects': 'nav.projects', '/phases': 'nav.phases',
+  '/': 'nav.dashboard', '/projects': 'nav.projects', '/phases': 'nav.phases', '/schedule': 'Schedule',
   '/updates': 'nav.updates', '/documents': 'nav.documents', '/attendance': 'nav.attendance',
   '/stock': 'nav.stock', '/chat': 'nav.chat', '/team': 'nav.team', '/reports': 'nav.reports',
   '/settings': 'nav.settings', '/billing': 'nav.billing',
@@ -278,6 +280,7 @@ export default function App() {
                 {can('projects.view') && <Route path="/projects" element={<Projects />} />}
                 {can('phases.view') && <Route path="/phases" element={<Kanban />} />}
                 {can('phases.view') && <Route path="/phases/:id/report" element={<PhaseReport />} />}
+                {can('schedule.view') && <Route path="/schedule" element={<Schedule />} />}
                 {can('updates.view') && <Route path="/updates" element={<Updates />} />}
                 {can('docs.view') && <Route path="/documents" element={<Documents />} />}
                 {can('attendance.view') && <Route path="/attendance" element={<Attendance />} />}

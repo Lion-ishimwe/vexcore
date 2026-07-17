@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { Pencil } from 'lucide-react'
+import { Pencil, X } from 'lucide-react'
 import { api } from '../api.js'
 import { useAuth } from '../auth.jsx'
 import { ErrorNote, Field } from '../ui.jsx'
@@ -13,7 +13,6 @@ const TABS = [
   ['guest', 'Guest Access'],
   ['attendance', 'Attendance'],
   ['security', 'Security'],
-  ['branding', 'Branding'],
 ]
 
 const ACCESS_TOGGLES = [
@@ -25,6 +24,7 @@ const ACCESS_TOGGLES = [
 // Guest areas are view-only and enabled individually (money is never shown).
 const GUEST_TOGGLES = [
   { key: 'guestPhases', label: 'Phases & tasks', sub: 'Guests can open the phase board and phase reports' },
+  { key: 'guestSchedule', label: 'Schedule', sub: 'Guests can view the Gantt schedule and download the plan' },
   { key: 'guestUpdates', label: 'Daily updates', sub: 'Guests see the daily reports forwarded to the account' },
   { key: 'guestStock', label: 'Stock', sub: 'Guests can view stock levels - quantities only, never amounts' },
 ]
@@ -42,6 +42,15 @@ export default function Settings() {
   const [draft, setDraft] = useState(profile)
   const [error, setError] = useState(null)
   const [saved, setSaved] = useState(false)
+  const [newType, setNewType] = useState('')
+  const workerTypes = settings.workerTypes ?? ['builder', 'helper']
+
+  const addWorkerType = async () => {
+    const t = newType.trim().toLowerCase()
+    if (!t) return
+    if (workerTypes.some((x) => x.toLowerCase() === t)) { setNewType(''); return }
+    if (await save({ workerTypes: [...workerTypes, t] })) setNewType('')
+  }
 
   const save = async (patch) => {
     setError(null); setSaved(false)
@@ -85,6 +94,28 @@ export default function Settings() {
   const saveProfile = async (e) => {
     e.preventDefault()
     if (await save(draft)) setEditing(false)
+  }
+
+  const uploadLogo = async (file) => {
+    setError(null); setSaved(false)
+    try {
+      const form = new FormData()
+      form.append('logo', file)
+      const r = await api('/settings/logo', { method: 'POST', form })
+      updateClient({ logo: r.logo })
+      setSaved(true)
+      setTimeout(() => setSaved(false), 2000)
+    } catch (err) { setError(err.message) }
+  }
+
+  const removeLogo = async () => {
+    setError(null); setSaved(false)
+    try {
+      await api('/settings/logo', { method: 'DELETE' })
+      updateClient({ logo: null })
+      setSaved(true)
+      setTimeout(() => setSaved(false), 2000)
+    } catch (err) { setError(err.message) }
   }
 
   const Toggle = ({ t }) => (
@@ -179,18 +210,73 @@ export default function Settings() {
         </div>
       )}
 
-      {/* ---------------- MY ACCOUNT (personal profile & language) ---------------- */}
-      {tab === 'account' && <Account section="profile" />}
+      {/* ---------------- MY ACCOUNT (personal profile, language & branding) ---------------- */}
+      {tab === 'account' && (
+        <>
+          <Account section="profile" />
+          <div className="card" style={{ maxWidth: 620, marginTop: 16 }}>
+            <h3>Branding</h3>
+            <p className="small muted" style={{ margin: '6px 0 14px' }}>
+              Your company logo is applied to everything that gets printed or exported - the schedule
+              PDF and Excel, letterheads, and the workers' badges and ID cards.
+            </p>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 18, flexWrap: 'wrap' }}>
+              <img src={client.logo || '/logo.png'} alt="Company logo"
+                style={{ width: 84, height: 84, borderRadius: 16, objectFit: 'cover', border: '1.5px solid var(--border)', background: '#fff' }} />
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                <div style={{ display: 'flex', gap: 8 }}>
+                  <label className="btn sm" style={{ cursor: 'pointer' }}>
+                    Upload logo
+                    <input type="file" accept="image/*" hidden
+                      onChange={(e) => { if (e.target.files[0]) uploadLogo(e.target.files[0]); e.target.value = '' }} />
+                  </label>
+                  {client.logo && <button className="btn ghost sm" onClick={removeLogo}>Use platform default</button>}
+                </div>
+                <span className="small muted">PNG or JPG · square images look best on cards {client.logo ? '· currently using your logo' : '· currently using the platform default'}</span>
+              </div>
+            </div>
+          </div>
+        </>
+      )}
 
       {/* ---------------- ACCESS CONTROL ---------------- */}
       {tab === 'access' && (
-        <div className="card">
-          <h3>Access control</h3>
-          <p className="small muted" style={{ margin: '6px 0 4px' }}>
-            Role permissions - changes apply immediately to all users in your account.
-          </p>
-          {ACCESS_TOGGLES.map((t) => <Toggle t={t} key={t.key} />)}
-        </div>
+        <>
+          <div className="card">
+            <h3>Access control</h3>
+            <p className="small muted" style={{ margin: '6px 0 4px' }}>
+              Role permissions - changes apply immediately to all users in your account.
+            </p>
+            {ACCESS_TOGGLES.map((t) => <Toggle t={t} key={t.key} />)}
+          </div>
+
+          <div className="card mt">
+            <h3>Worker types</h3>
+            <p className="small muted" style={{ margin: '6px 0 12px' }}>
+              The site roles available when enrolling workers in Attendance - add the ones your
+              sites use (mason, electrician, plumber, carpenter…). Existing workers keep their
+              type if you remove one.
+            </p>
+            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 12 }}>
+              {workerTypes.map((t) => (
+                <span className="chip" key={t} style={{ textTransform: 'capitalize' }}>
+                  {t}
+                  {workerTypes.length > 1 && (
+                    <X size={12} style={{ cursor: 'pointer' }} title={`Remove ${t}`}
+                      onClick={() => save({ workerTypes: workerTypes.filter((x) => x !== t) })} />
+                  )}
+                </span>
+              ))}
+            </div>
+            <div style={{ display: 'flex', gap: 8, maxWidth: 380 }}>
+              <input value={newType} placeholder="e.g. mason"
+                onChange={(e) => setNewType(e.target.value)}
+                onKeyDown={(e) => e.key === 'Enter' && (e.preventDefault(), addWorkerType())}
+                style={{ flex: 1, padding: '8px 11px', borderRadius: 9, border: '1px solid var(--border)', fontSize: 13, fontFamily: 'inherit' }} />
+              <button className="btn sm" onClick={addWorkerType} disabled={!newType.trim()}>Add type</button>
+            </div>
+          </div>
+        </>
       )}
 
       {/* ---------------- GUEST ACCESS ---------------- */}
@@ -258,19 +344,6 @@ export default function Settings() {
         </>
       )}
 
-      {/* ---------------- BRANDING ---------------- */}
-      {tab === 'branding' && (
-        <div className="card">
-          <h3>Branding</h3>
-          <div className="toggle-row">
-            <div>
-              <div className="t-label">Company logo & theme</div>
-              <div className="t-sub">Per-client branding - arriving in Phase 4</div>
-            </div>
-            <button className="btn ghost sm" disabled>Coming soon</button>
-          </div>
-        </div>
-      )}
     </>
   )
 }

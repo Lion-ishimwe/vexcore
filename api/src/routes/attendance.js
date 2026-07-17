@@ -160,6 +160,14 @@ async function genCardId(clientId) {
 
 // ---- Workers (enrolled manually once; then they tap their card daily) ----
 
+// Worker types come from Settings › Access control (admin-defined site roles).
+// Unknown input falls back to the first configured type.
+function resolveWorkerType(client, raw) {
+  const types = settingsOf(client).workerTypes ?? ['builder', 'helper']
+  const wanted = String(raw ?? '').trim().toLowerCase()
+  return types.find(t => t.toLowerCase() === wanted) ?? types[0] ?? 'builder'
+}
+
 // Optional project assignment for a worker - must exist and be in scope.
 async function resolveWorkerProject(req, scope) {
   if (!req.body.projectId) return { projectId: null }
@@ -210,7 +218,7 @@ r.post('/workers', requireCap('workers.manage'), async (req, res) => {
   const worker = await db.worker.create({
     data: {
       clientId: req.client.id, projectId: proj.projectId, name,
-      type: req.body.type === 'helper' ? 'helper' : 'builder',
+      type: resolveWorkerType(req.client, req.body.type),
       phone: (req.body.phone ?? '').trim() || null,
       cardId,
       dailyRate: req.body.dailyRate ? Number(req.body.dailyRate) || null : null,
@@ -241,7 +249,7 @@ r.post('/workers/bulk', requireCap('workers.manage'), async (req, res) => {
     if (!name) { skipped.push({ line, name: raw.name ?? '', reason: 'Missing name' }); continue }
     valid.push({
       clientId: req.client.id, projectId: proj.projectId, name,
-      type: String(raw.type ?? '').trim().toLowerCase() === 'helper' ? 'helper' : 'builder',
+      type: resolveWorkerType(req.client, raw.type),
       phone: String(raw.phone ?? '').trim() || null,
       cardId: await genCardId(req.client.id),
       dailyRate: Number(raw.dailyRate) || null,
@@ -266,7 +274,7 @@ r.patch('/workers/:id', requireCap('workers.manage'), async (req, res) => {
     data.projectId = proj.projectId
   }
   if (req.body.name !== undefined && String(req.body.name).trim()) data.name = String(req.body.name).trim()
-  if (req.body.type !== undefined) data.type = req.body.type === 'helper' ? 'helper' : 'builder'
+  if (req.body.type !== undefined) data.type = resolveWorkerType(req.client, req.body.type)
   if (req.body.phone !== undefined) data.phone = String(req.body.phone).trim() || null
   if (req.body.dailyRate !== undefined) data.dailyRate = Number(req.body.dailyRate) || null
   if (req.body.active !== undefined) data.active = !!req.body.active
@@ -307,7 +315,11 @@ r.get('/workers/badges', requireCap('attendance.view'), async (req, res) => {
       qr: await QRCode.toDataURL(cardId, { margin: 1, width: 140 }),
     })
   }
-  res.json({ company: req.client.company, contact: req.client.contact, workers: shaped })
+  res.json({
+    company: req.client.company, contact: req.client.contact,
+    logo: req.client.logo ? '/uploads/' + req.client.logo : '/logo.png',
+    workers: shaped,
+  })
 })
 
 // ---- Issued cards (every "Generate card" is recorded and downloadable) ----
@@ -352,7 +364,11 @@ r.get('/cards', requireCap('attendance.view'), async (req, res) => {
       qr: await QRCode.toDataURL(i.cardId, { margin: 1, width: 140 }),
     })
   }
-  res.json({ company: req.client.company, contact: req.client.contact, cards: shaped })
+  res.json({
+    company: req.client.company, contact: req.client.contact,
+    logo: req.client.logo ? '/uploads/' + req.client.logo : '/logo.png',
+    cards: shaped,
+  })
 })
 
 // ---- Sessions ----

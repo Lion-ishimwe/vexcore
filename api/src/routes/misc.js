@@ -8,6 +8,7 @@ import { PLANS } from '../plans.js'
 import { scopedProjectIds, projectScopeWhere, inScope } from '../scope.js'
 import { ensureSystemFolders } from './docs.js'
 import { wagesForProjects } from './projects.js'
+import { photoUpload } from './account.js'
 
 const r = Router()
 
@@ -29,10 +30,10 @@ const upload = multer({
 r.get('/members', requireCap('chat'), async (req, res) => {
   const users = await db.user.findMany({
     where: { clientId: req.client.id },
-    select: { id: true, name: true, role: true },
+    select: { id: true, name: true, role: true, photo: true },
     orderBy: { name: 'asc' },
   })
-  res.json(users)
+  res.json(users.map(u => ({ ...u, photo: u.photo ? '/uploads/' + u.photo : null })))
 })
 
 function attachmentKind(mimetype = '') {
@@ -624,7 +625,24 @@ r.get('/settings', (req, res) => {
     settings: settingsOf(req.client), currency: req.client.currency,
     company: req.client.company, tin: req.client.tin, location: req.client.location,
     contact: req.client.contact, country: req.client.country,
+    logo: req.client.logo ? '/uploads/' + req.client.logo : null,
   })
+})
+
+// ---- Branding: the company logo used on everything printed (schedule PDF /
+// Excel, letterheads, worker badges and ID cards). ----
+
+r.post('/settings/logo', requireCap('settings.edit'), photoUpload.single('logo'), async (req, res) => {
+  if (!req.file) return res.status(400).json({ error: 'Pick an image file (PNG or JPG)' })
+  await db.client.update({ where: { id: req.client.id }, data: { logo: req.file.filename } })
+  await audit(req.client.id, req.user.name, 'branding.logo', 'Company logo updated')
+  res.json({ logo: '/uploads/' + req.file.filename })
+})
+
+r.delete('/settings/logo', requireCap('settings.edit'), async (req, res) => {
+  await db.client.update({ where: { id: req.client.id }, data: { logo: null } })
+  await audit(req.client.id, req.user.name, 'branding.logo', 'Company logo removed - platform default applies')
+  res.json({ logo: null })
 })
 
 r.patch('/settings', requireCap('settings.edit'), async (req, res) => {
@@ -635,6 +653,13 @@ r.patch('/settings', requireCap('settings.edit'), async (req, res) => {
   }
   for (const k of ['attInStart', 'attInEnd', 'attOutStart', 'attOutEnd']) {
     if (typeof req.body[k] === 'string' && /^([01]\d|2[0-3]):[0-5]\d$/.test(req.body[k])) next[k] = req.body[k]
+  }
+  // Worker types: a de-duplicated list of short names, at least one kept.
+  if (Array.isArray(req.body.workerTypes)) {
+    const list = [...new Set(
+      req.body.workerTypes.map(t => String(t).trim().toLowerCase().slice(0, 30)).filter(Boolean)
+    )].slice(0, 30)
+    if (list.length) next.workerTypes = list
   }
   const data = { settings: next }
   if (req.body.currency) data.currency = req.body.currency

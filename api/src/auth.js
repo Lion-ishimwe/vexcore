@@ -15,6 +15,10 @@ export const DEFAULT_SETTINGS = {
   guestPhases: true,
   guestUpdates: true,
   guestStock: false,
+  guestSchedule: true,
+  // Worker types available when enrolling (Settings › Access control) - the
+  // admin can add site roles beyond the two defaults.
+  workerTypes: ['builder', 'helper'],
   // Attendance time windows: when enabled, clock-ins/outs are only accepted
   // inside these ranges (late arrivals are not recorded).
   attWindows: false,
@@ -26,19 +30,19 @@ export const DEFAULT_SETTINGS = {
 
 const ROLE_CAPS = {
   SUPER: ['*'],
-  CLIENT: ['dashboard', 'projects.view', 'projects.create', 'phases.view', 'updates.view',
+  CLIENT: ['dashboard', 'projects.view', 'projects.create', 'phases.view', 'schedule.view', 'updates.view',
     'stock.amounts', 'damaged.view', 'chat', 'reports', 'settings.edit', 'team.view',
     'team.create', 'billing', 'audit.view', 'docs.view', 'docs.upload', 'docs.admin',
     'attendance.view', 'attendance.session'],
-  SENIOR: ['dashboard', 'projects.view', 'phases.view', 'phases.edit', 'updates.view',
+  SENIOR: ['dashboard', 'projects.view', 'phases.view', 'schedule.view', 'phases.edit', 'updates.view',
     'updates.submit', 'updates.forward', 'stock.view', 'stock.amounts', 'stock.edit',
     'stock.approve', 'damaged.view', 'chat', 'reports', 'team.view', 'team.create', 'audit.view',
     'docs.view', 'docs.upload', 'attendance.view', 'attendance.record', 'attendance.session', 'workers.manage'],
-  SITE: ['dashboard', 'projects.view', 'phases.view', 'updates.view', 'updates.submit', 'chat',
+  SITE: ['dashboard', 'projects.view', 'phases.view', 'schedule.view', 'updates.view', 'updates.submit', 'chat',
     'docs.view', 'docs.upload', 'attendance.view', 'attendance.record', 'workers.manage'],
   STOCK: ['dashboard', 'stock.view', 'stock.request', 'chat', 'docs.view', 'docs.upload',
     'attendance.view', 'attendance.record'],
-  GUEST: ['dashboard', 'projects.view', 'phases.view', 'updates.view', 'docs.view'],
+  GUEST: ['dashboard', 'projects.view', 'phases.view', 'schedule.view', 'updates.view', 'docs.view'],
 }
 // The account admin (CLIENT role) can do everything the roles below them can.
 ROLE_CAPS.CLIENT = [...new Set([
@@ -60,6 +64,7 @@ export function capsFor(user, client) {
   if (user.role === 'GUEST') {
     if (!s.guestPhases) caps.delete('phases.view')
     if (!s.guestUpdates) caps.delete('updates.view')
+    if (!s.guestSchedule) caps.delete('schedule.view')
     if (s.guestStock) caps.add('stock.view')
   }
   return [...caps]

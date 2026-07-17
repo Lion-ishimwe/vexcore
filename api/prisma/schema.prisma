@@ -15,6 +15,7 @@ model Client {
   location  String?
   tin       String?
   currency  String   @default("RWF")
+  logo      String?  // per-client branding logo (uploads/ filename); platform logo otherwise
   status    String   @default("TRIAL") // TRIAL | ACTIVE | SUSPENDED | TERMINATED
   trialEndsAt DateTime?
   plan      String?  // STARTER | PRO | ENTERPRISE (null until first subscription)

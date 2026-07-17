@@ -237,6 +237,50 @@ r.post('/:id/phases', requireCap('phases.edit'), async (req, res) => {
   res.json(phase)
 })
 
+// Bulk phase upload from the CSV template. Every row lands in "To do";
+// problem rows come back with the reason so nothing fails silently.
+r.post('/:id/phases/bulk', requireCap('phases.edit'), async (req, res) => {
+  const scope = await scopedProjectIds(req)
+  const project = await db.project.findFirst({ where: { id: +req.params.id, clientId: req.client.id } })
+  if (!project || !inScope(scope, project.id)) return res.status(404).json({ error: 'Project not found' })
+  const rows = Array.isArray(req.body.phases) ? req.body.phases.slice(0, 200) : []
+  if (!rows.length) return res.status(400).json({ error: 'No rows found in the file' })
+
+  let orderIdx = await db.phase.count({ where: { projectId: project.id } })
+  const parseDate = (s) => {
+    if (!String(s ?? '').trim()) return null
+    const d = new Date(String(s).trim())
+    return isNaN(d.getTime()) ? undefined : d
+  }
+  const valid = []
+  const skipped = []
+  for (let i = 0; i < rows.length; i++) {
+    const raw = rows[i]
+    const line = i + 2 // header is line 1 in the template
+    const name = String(raw.name ?? '').trim()
+    if (!name) { skipped.push({ line, name: raw.name ?? '', reason: 'Missing phase name' }); continue }
+    const startDate = parseDate(raw.startDate)
+    const endDate = parseDate(raw.endDate)
+    if (startDate === undefined || endDate === undefined) {
+      skipped.push({ line, name, reason: 'Bad date - use YYYY-MM-DD' })
+      continue
+    }
+    valid.push({
+      projectId: project.id, name, status: 'todo',
+      budget: Number(raw.budget) || 0,
+      costPerBuilder: Number(raw.costPerBuilder) || 0,
+      costPerHelper: Number(raw.costPerHelper) || 0,
+      startDate, endDate, orderIdx: orderIdx++,
+    })
+  }
+  if (valid.length) await db.phase.createMany({ data: valid })
+  if (valid.length && project.status === 'Planning')
+    await db.project.update({ where: { id: project.id }, data: { status: 'In progress' } })
+  await audit(req.client.id, req.user.name, 'phase.bulk',
+    `${project.name}: ${valid.length} phase${valid.length === 1 ? '' : 's'} uploaded to To do${skipped.length ? `, ${skipped.length} skipped` : ''}`)
+  res.json({ added: valid.length, skipped })
+})
+
 r.patch('/phases/:id', requireCap('phases.edit'), async (req, res) => {
   const scope = await scopedProjectIds(req)
   const phase = await db.phase.findFirst({
@@ -412,6 +456,138 @@ r.post('/phases/:id/materials', requireCap('phases.edit'), async (req, res) => {
   ])
   await audit(req.client.id, req.user.name, 'phase.material', `${n} ${item.unit} ${item.name} → ${phase.name}`)
   res.json(material)
+})
+
+// ---- Schedule PDF: the Gantt plan as a downloadable file with letterhead ----
+
+const GANTT_PDF = {
+  colors: { todo: '#94a3b8', active: '#f59e0b', done: '#16a34a', today: '#dc2626', grid: '#e5e7eb', month: '#c3c9d2' },
+  statusText: { todo: 'To do', active: 'In progress', done: 'Done' },
+}
+
+r.get('/:id/schedule.pdf', requireCap('schedule.view'), async (req, res) => {
+  const scope = await scopedProjectIds(req)
+  const project = await db.project.findFirst({
+    where: { id: +req.params.id, clientId: req.client.id },
+    include: { phases: { orderBy: { orderIdx: 'asc' }, include: { assignee: { select: { name: true } } } } },
+  })
+  if (!project || !inScope(scope, project.id)) return res.status(404).json({ error: 'Project not found' })
+
+  const { default: PDFDocument } = await import('pdfkit')
+  const doc = new PDFDocument({ size: 'A4', layout: 'landscape', margin: 40 })
+  res.setHeader('Content-Type', 'application/pdf')
+  res.setHeader('Content-Disposition',
+    `attachment; filename="schedule-${project.name.replace(/[^\w-]+/g, '-')}.pdf"`)
+  doc.pipe(res)
+
+  const M = 40
+  const W = doc.page.width - M * 2
+  const C = GANTT_PDF.colors
+
+  // Letterhead: the client's own branding logo when set, platform logo otherwise.
+  const logoPath = [
+    ...(req.client.logo ? [path.join(UPLOADS, req.client.logo)] : []),
+    path.resolve('../web/public/logo.png'),
+    path.resolve('../logo.png'),
+  ].find(p => fs.existsSync(p))
+  if (logoPath) { try { doc.image(logoPath, M, 36, { fit: [44, 44] }) } catch { /* text letterhead still stands */ } }
+  const textX = logoPath ? M + 56 : M
+  doc.font('Helvetica-Bold').fontSize(16).fillColor('#10151d').text(req.client.company, textX, 38)
+  doc.font('Helvetica').fontSize(9).fillColor('#64748b')
+    .text(`TIN: ${req.client.tin ?? '-'}   ·   ${req.client.location ?? '-'}   ·   ${req.client.contact ?? '-'}`, textX, 58)
+  doc.fontSize(9).fillColor('#334155')
+    .text(`Project schedule - ${project.name}  ·  generated ${new Date().toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' })}`, textX, 71)
+  doc.moveTo(M, 90).lineTo(M + W, 90).lineWidth(1.5).strokeColor(C.month).stroke()
+
+  const dated = project.phases.filter(p => p.startDate && p.endDate)
+  const undated = project.phases.filter(p => !p.startDate || !p.endDate)
+
+  if (!dated.length) {
+    doc.font('Helvetica').fontSize(11).fillColor('#64748b')
+      .text('No phases with both start and end dates yet - set dates on the phase cards and the schedule draws itself.', M, 110, { width: W })
+    doc.end()
+    return
+  }
+
+  // Timeline (whole months, like the on-screen chart)
+  const min0 = new Date(Math.min(...dated.map(p => +new Date(p.startDate))))
+  const max0 = new Date(Math.max(...dated.map(p => +new Date(p.endDate))))
+  const tMin = new Date(min0.getFullYear(), min0.getMonth(), 1)
+  const tMax = new Date(max0.getFullYear(), max0.getMonth() + 1, 0)
+  const totalDays = Math.round((tMax - tMin) / 86400000) + 1
+  const LABEL = 175
+  const CHART = W - LABEL
+  const xOf = (d) => M + LABEL + (Math.round((new Date(d) - tMin) / 86400000) / totalDays) * CHART
+
+  const months = []
+  for (let d = new Date(tMin); d <= tMax; d = new Date(d.getFullYear(), d.getMonth() + 1, 1))
+    months.push({ x: xOf(d), label: d.toLocaleDateString('en-GB', { month: 'short', year: '2-digit' }) })
+  const weekXs = []
+  for (let i = 7; i < totalDays; i += 7) weekXs.push(M + LABEL + (i / totalDays) * CHART)
+  const now = new Date()
+  const todayX = now >= tMin && now <= tMax ? xOf(now) : null
+
+  const ROW = 26
+  const monthStrip = (y) => {
+    doc.font('Helvetica-Bold').fontSize(7).fillColor('#64748b')
+    months.forEach((m, i) => {
+      const next = months[i + 1]?.x ?? M + LABEL + CHART
+      doc.text(m.label.toUpperCase(), m.x, y + 3, { width: next - m.x, align: 'center' })
+    })
+    return y + 16
+  }
+  const block = (y, rows) => {
+    const h = rows.length * ROW
+    // grid first, bars on top
+    weekXs.forEach(x => doc.moveTo(x, y).lineTo(x, y + h).lineWidth(0.5).strokeColor(C.grid).stroke())
+    months.forEach(m => doc.moveTo(m.x, y).lineTo(m.x, y + h).lineWidth(0.75).strokeColor(C.month).stroke())
+    rows.forEach((ph, i) => {
+      const ry = y + i * ROW
+      doc.font('Helvetica-Bold').fontSize(8.5).fillColor('#10151d')
+        .text(ph.name, M, ry + 3, { width: LABEL - 12, ellipsis: true, lineBreak: false })
+      doc.font('Helvetica').fontSize(7).fillColor('#94a3b8')
+        .text(`${new Date(ph.startDate).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })} - ${new Date(ph.endDate).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: '2-digit' })}${ph.assignee ? ' · ' + ph.assignee.name : ''}`,
+          M, ry + 13, { width: LABEL - 12, ellipsis: true, lineBreak: false })
+      const x1 = xOf(ph.startDate)
+      const x2 = Math.max(x1 + 6, xOf(ph.endDate) + CHART / totalDays)
+      doc.roundedRect(x1, ry + 5, x2 - x1, ROW - 11, 3).fillColor(C[ph.status]).fill()
+      if (x2 - x1 > 34) {
+        doc.font('Helvetica-Bold').fontSize(7).fillColor('#ffffff')
+          .text(`${ph.percent}%`, x1, ry + 9, { width: x2 - x1, align: 'center', lineBreak: false })
+      }
+    })
+    if (todayX != null) doc.moveTo(todayX, y - 2).lineTo(todayX, y + h + 2).lineWidth(1.2).strokeColor(C.today).stroke()
+    return y + h
+  }
+
+  // Paginate rows
+  let y = 102
+  let rest = [...dated]
+  while (rest.length) {
+    y = monthStrip(y)
+    const capacity = Math.max(1, Math.floor((doc.page.height - 60 - y) / ROW))
+    const page = rest.slice(0, capacity)
+    rest = rest.slice(capacity)
+    y = block(y, page)
+    if (rest.length) { doc.addPage(); y = M }
+  }
+
+  // Legend + unscheduled note
+  y += 14
+  doc.font('Helvetica').fontSize(8)
+  let lx = M
+  for (const [k, label] of Object.entries(GANTT_PDF.statusText)) {
+    doc.circle(lx + 4, y + 4, 4).fillColor(C[k]).fill()
+    doc.fillColor('#334155').text(label, lx + 12, y, { lineBreak: false })
+    lx += 12 + doc.widthOfString(label) + 18
+  }
+  doc.circle(lx + 4, y + 4, 4).fillColor(C.today).fill()
+  doc.fillColor('#334155').text('Today', lx + 12, y, { lineBreak: false })
+  if (undated.length) {
+    doc.font('Helvetica').fontSize(8).fillColor('#94a3b8')
+      .text(`Not on the schedule (no dates yet): ${undated.map(p => p.name).join(', ')}`, M, y + 16, { width: W })
+  }
+  doc.end()
 })
 
 // ---- Phase report: the completion summary the admin opens from the dashboard ----

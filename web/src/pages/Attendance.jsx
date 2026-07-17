@@ -252,6 +252,16 @@ export default function Attendance() {
     // recognisable at the gate. Falls back to initials if it fails to load.
     let photoImg = null
     if (c.photo) { try { photoImg = await loadImg(c.photo) } catch { photoImg = null } }
+    // Company branding logo (falls back to the amber "B" mark if it fails).
+    let brandImg = null
+    try { brandImg = await loadImg((issued ?? badges)?.logo || '/logo.png') } catch { brandImg = null }
+    const coverDraw = (img, bx, by, bw, bh, r) => {
+      ctx.save(); rr(bx, by, bw, bh, r); ctx.clip()
+      const scale = Math.max(bw / img.width, bh / img.height)
+      const sw = bw / scale, sh = bh / scale
+      ctx.drawImage(img, (img.width - sw) / 2, (img.height - sh) / 2, sw, sh, bx, by, bw, bh)
+      ctx.restore()
+    }
     const W = 856, H = 540, GAP = 40, R = 24
     const canvas = document.createElement('canvas')
     canvas.width = W
@@ -298,10 +308,15 @@ export default function Attendance() {
     // ---- FRONT ----
     ctx.save(); rr(1, 1, W - 2, H - 2, R); ctx.clip()
     sheet(0, false)
-    // top row
-    ctx.fillStyle = '#f59e0b'; rr(40, 34, 46, 46, 12); ctx.fill()
-    ctx.fillStyle = '#1c2430'; ctx.font = F(800, 26); ctx.textAlign = 'center'; ctx.textBaseline = 'middle'
-    ctx.fillText('B', 63, 58)
+    // top row - the company's own logo brands the card front
+    if (brandImg) {
+      coverDraw(brandImg, 40, 34, 46, 46, 12)
+    } else {
+      ctx.fillStyle = '#f59e0b'; rr(40, 34, 46, 46, 12); ctx.fill()
+      ctx.fillStyle = '#1c2430'; ctx.font = F(800, 26); ctx.textAlign = 'center'; ctx.textBaseline = 'middle'
+      ctx.fillText('B', 63, 58)
+    }
+    ctx.textAlign = 'center'; ctx.textBaseline = 'middle'
     ctx.textAlign = 'left'; ctx.fillStyle = '#10151d'; ctx.font = F(800, 22)
     ctx.fillText(spaced(company.toUpperCase()), 100, 60)
     ctx.font = F(800, 15); ctx.fillStyle = '#b45309'
@@ -359,14 +374,26 @@ export default function Attendance() {
     const Y = H + GAP
     ctx.save(); rr(1, Y + 1, W - 2, H - 2, R); ctx.clip()
     sheet(Y, true)
-    ctx.fillStyle = '#f59e0b'; rr(W / 2 - 46, Y + 96, 92, 92, 22); ctx.fill()
-    ctx.fillStyle = '#1c2430'; ctx.font = F(800, 50); ctx.textAlign = 'center'; ctx.textBaseline = 'middle'
-    ctx.fillText('B', W / 2, Y + 144)
-    ctx.fillStyle = '#ffffff'; ctx.font = F(800, 29)
-    ctx.fillText(spaced('BRIDGE CONSTRUCTION'), W / 2, Y + 238)
+    if (brandImg) {
+      coverDraw(brandImg, W / 2 - 46, Y + 96, 92, 92, 22)
+    } else {
+      ctx.fillStyle = '#f59e0b'; rr(W / 2 - 46, Y + 96, 92, 92, 22); ctx.fill()
+      ctx.fillStyle = '#1c2430'; ctx.font = F(800, 50); ctx.textAlign = 'center'; ctx.textBaseline = 'middle'
+      ctx.fillText('B', W / 2, Y + 144)
+    }
+    ctx.textAlign = 'center'; ctx.textBaseline = 'middle'
+    // Company name, shrunk to fit the card width when it runs long
+    let namePx = 29
+    ctx.font = F(800, namePx)
+    while (ctx.measureText(spaced(company.toUpperCase())).width > W - 90 && namePx > 14) {
+      namePx -= 1
+      ctx.font = F(800, namePx)
+    }
+    ctx.fillStyle = '#ffffff'
+    ctx.fillText(spaced(company.toUpperCase()), W / 2, Y + 238)
     ctx.fillStyle = '#f59e0b'; ctx.fillRect(W / 2 - 38, Y + 268, 76, 4)
     ctx.fillStyle = '#8fa0b8'; ctx.font = F(700, 13)
-    ctx.fillText(spaced('CONSTRUCTION MANAGEMENT PLATFORM'), W / 2, Y + 302)
+    ctx.fillText(spaced('POWERED BY BRIDGE CONSTRUCTION'), W / 2, Y + 302)
     titleBlock(Y, [
       ['Property of', company],
       ['If found', contact || 'Return to site office'],
@@ -704,7 +731,11 @@ export default function Attendance() {
                 <div className="grid grid-2" style={{ gap: 0, columnGap: 12 }}>
                   <Field label="Type">
                     <select value={wForm.type} onChange={wSet('type')}>
-                      <option value="builder">Builder</option><option value="helper">Helper</option>
+                      {(client?.settings?.workerTypes ?? ['builder', 'helper']).map((t) => (
+                        <option key={t} value={t} style={{ textTransform: 'capitalize' }}>
+                          {t.charAt(0).toUpperCase() + t.slice(1)}
+                        </option>
+                      ))}
                     </select>
                   </Field>
                   <Field label="Phone"><input value={wForm.phone} onChange={wSet('phone')} placeholder="+250 …" /></Field>
@@ -789,7 +820,7 @@ export default function Attendance() {
                       <div className="idc-side-label no-print">FRONT</div>
                       <div className="id-card arch">
                         <div className="idc2-top">
-                          <img className="idc2-logo" src="/logo.png" alt="" />
+                          <img className="idc2-logo" src={badges.logo || '/logo.png'} alt="" />
                           <span className="idc2-company">{badges.company}</span>
                           <span className="idc2-pass">SITE PASS</span>
                         </div>
@@ -822,10 +853,10 @@ export default function Attendance() {
                       <div className="idc-side-label no-print">BACK</div>
                       <div className="id-card arch back2">
                         <div className="idcb2-center">
-                          <img className="idc2-logo big" src="/logo.png" alt="" />
-                          <b>BRIDGE CONSTRUCTION</b>
+                          <img className="idc2-logo big" src={badges.logo || '/logo.png'} alt="" />
+                          <b>{badges.company?.toUpperCase()}</b>
                           <i className="idcb2-rule" />
-                          <span className="idcb2-sub">CONSTRUCTION MANAGEMENT PLATFORM</span>
+                          <span className="idcb2-sub">POWERED BY BRIDGE CONSTRUCTION</span>
                         </div>
                         <div className="idc2-block dark">
                           <div><span>Property of</span><b>{badges.company}</b></div>
@@ -842,7 +873,9 @@ export default function Attendance() {
             <div className="badge-sheet">
               {badges.workers.filter(matchProj).map((w) => (
                 <div className="worker-badge" key={w.id}>
-                  <div className="wb-head">{badges.company}</div>
+                  <div className="wb-head">
+                    <img className="wb-logo" src={badges.logo || '/logo.png'} alt="" /> {badges.company}
+                  </div>
                   {w.photo && <img className="wb-photo" src={w.photo} alt={w.name} />}
                   <b>{w.name}</b>
                   <span className="wb-type">{w.type}{w.phone ? ` · ${w.phone}` : ''}{w.projectName ? ` · ${w.projectName}` : ''}</span>

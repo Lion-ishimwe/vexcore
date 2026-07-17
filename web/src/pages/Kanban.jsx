@@ -1,6 +1,6 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
-import { CalendarDays, UserRound, Banknote, Package, CheckCircle2, Camera, X, Plus, FileText, Pencil, Trash2, BarChart3 } from 'lucide-react'
+import { CalendarDays, UserRound, Banknote, Package, CheckCircle2, Camera, X, Plus, FileText, Pencil, Trash2, BarChart3, FileSpreadsheet, Upload } from 'lucide-react'
 import { api, fmtMoney, fmtDay } from '../api.js'
 import { useAuth } from '../auth.jsx'
 import { Modal, Field, ErrorNote, Lightbox, useForm } from '../ui.jsx'
@@ -26,6 +26,8 @@ export default function Kanban() {
   const [lightbox, setLightbox] = useState(null)
   const [dragging, setDragging] = useState(null) // phase being dragged
   const [overCol, setOverCol] = useState(null) // column hovered during drag
+  const [bulkResult, setBulkResult] = useState(null) // { added, skipped[] }
+  const bulkRef = useRef(null)
 
   const load = () => api('/projects').then((ps) => {
     setProjects(ps)
@@ -88,6 +90,62 @@ export default function Kanban() {
     catch (err) { setToast(err.message) }
   }
 
+  // ---- Phase CSV template + bulk upload (rows land in "To do") ----
+
+  const downloadTemplate = () => {
+    const csv = [
+      'name,startDate,endDate,budget,costPerBuilder,costPerHelper',
+      'Foundation,2026-08-01,2026-09-15,5000000,9000,5000',
+      'Roofing,2026-09-16,2026-10-20,3500000,,',
+    ].join('\n')
+    const a = document.createElement('a')
+    a.href = URL.createObjectURL(new Blob([csv], { type: 'text/csv' }))
+    a.download = 'phases-template.csv'
+    a.click()
+    URL.revokeObjectURL(a.href)
+  }
+
+  // Minimal CSV parsing with quoted-field support - enough for the template.
+  const parseCsvLine = (line) => {
+    const out = []
+    let cur = '', inQ = false
+    for (let i = 0; i < line.length; i++) {
+      const c = line[i]
+      if (inQ) {
+        if (c === '"' && line[i + 1] === '"') { cur += '"'; i++ }
+        else if (c === '"') inQ = false
+        else cur += c
+      } else if (c === '"') inQ = true
+      else if (c === ',') { out.push(cur); cur = '' }
+      else cur += c
+    }
+    out.push(cur)
+    return out.map((s) => s.trim())
+  }
+
+  const bulkUpload = async (file) => {
+    setToast(null)
+    try {
+      const text = await file.text()
+      const lines = text.split(/\r?\n/).filter((l) => l.trim())
+      if (lines.length < 2) throw new Error('The file has no data rows - download the template to see the format')
+      const headers = parseCsvLine(lines[0]).map((h) => h.toLowerCase().replace(/[^a-z]/g, ''))
+      const col = (h) => headers.indexOf(h)
+      if (col('name') === -1) throw new Error('The first line must be the template header (name, startDate, endDate, budget, costPerBuilder, costPerHelper)')
+      const rows = lines.slice(1).map((line) => {
+        const cells = parseCsvLine(line)
+        const pick = (h) => (col(h) === -1 ? '' : cells[col(h)] ?? '')
+        return {
+          name: pick('name'), startDate: pick('startdate'), endDate: pick('enddate'),
+          budget: pick('budget'), costPerBuilder: pick('costperbuilder'), costPerHelper: pick('costperhelper'),
+        }
+      })
+      const r = await api(`/projects/${project.id}/phases/bulk`, { method: 'POST', body: { phases: rows } })
+      setBulkResult(r)
+      load()
+    } catch (err) { setToast(err.message) }
+  }
+
   const siteEngineers = team.filter((t) => ['SITE', 'SENIOR'].includes(t.role))
   const canTick = can('updates.submit')
   const canDownload = can('media.download')
@@ -136,7 +194,19 @@ export default function Kanban() {
           </select>
           {canEdit && <span className="small muted">Drag cards between columns to change stage</span>}
         </div>
-        {canEdit && project && <button className="btn sm" onClick={() => setCreating(true)}>+ New Phase</button>}
+        {canEdit && project && (
+          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+            <button className="btn ghost sm" onClick={downloadTemplate} title="CSV template - uploaded rows land in To do">
+              <FileSpreadsheet size={13} /> Template
+            </button>
+            <input type="file" accept=".csv,text/csv" hidden ref={bulkRef}
+              onChange={(e) => { if (e.target.files[0]) bulkUpload(e.target.files[0]); e.target.value = '' }} />
+            <button className="btn ghost sm" onClick={() => bulkRef.current.click()}>
+              <Upload size={13} /> Bulk upload
+            </button>
+            <button className="btn sm" onClick={() => setCreating(true)}>+ New Phase</button>
+          </div>
+        )}
       </div>
       {toast && <div className="error-note">{toast}</div>}
 
@@ -284,6 +354,25 @@ export default function Kanban() {
       ) : <div className="muted">No project selected.</div>}
 
       <Lightbox img={lightbox} onClose={() => setLightbox(null)} />
+
+      {bulkResult && (
+        <Modal title="Bulk upload result" onClose={() => setBulkResult(null)}>
+          <p style={{ marginBottom: 12 }}>
+            <b>{bulkResult.added}</b> phase{bulkResult.added === 1 ? '' : 's'} added to <b>To do</b>.
+          </p>
+          {bulkResult.skipped?.length > 0 && (
+            <>
+              <p className="small muted" style={{ marginBottom: 8 }}>Skipped rows - fix them in the file and upload again:</p>
+              <div className="small" style={{ display: 'grid', gap: 4, marginBottom: 14 }}>
+                {bulkResult.skipped.map((s, i) => (
+                  <div key={i}>Line {s.line}: <b>{s.name || '(no name)'}</b> - {s.reason}</div>
+                ))}
+              </div>
+            </>
+          )}
+          <button className="btn" style={{ width: '100%', justifyContent: 'center' }} onClick={() => setBulkResult(null)}>OK</button>
+        </Modal>
+      )}
 
       {(creating || editing) && (
         <Modal title={editing ? `Edit phase - ${editing.name}` : `New phase - ${project.name}`}

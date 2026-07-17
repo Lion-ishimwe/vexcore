@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import {
   Search, LayoutGrid, List, Download, MoreHorizontal, Eye, KeyRound, Copy,
-  ShieldCheck, ShieldOff, CheckCircle2,
+  ShieldCheck, ShieldOff, CheckCircle2, Network,
 } from 'lucide-react'
 import { api, fmtDate, fmtDay } from '../api.js'
 import { useAuth } from '../auth.jsx'
@@ -11,8 +11,16 @@ const ROLE_LABEL = { CLIENT: 'Admin', SENIOR: 'Senior Engineer', SITE: 'Site Eng
 const ROLE_BADGE = { CLIENT: 'amber', SENIOR: 'blue', SITE: 'gray', STOCK: 'gray', GUEST: 'green' }
 const CREATABLE = { CLIENT: ['SENIOR', 'SITE', 'STOCK', 'GUEST'], SENIOR: ['SITE', 'STOCK'] }
 
+// Org chart levels - the chain of command, top to bottom.
+const ORG_LEVELS = [
+  { roles: ['CLIENT'], label: 'Account owner' },
+  { roles: ['SENIOR'], label: 'Senior Engineers' },
+  { roles: ['SITE', 'STOCK'], label: 'Site operations' },
+  { roles: ['GUEST'], label: 'View-only guests' },
+]
+
 export default function Team() {
-  const { user } = useAuth()
+  const { user, client } = useAuth()
   const [team, setTeam] = useState(null)
   const [error, setError] = useState(null)
   const [creating, setCreating] = useState(false)
@@ -102,6 +110,7 @@ export default function Team() {
         <div className="tt-views">
           <button className={view === 'grid' ? 'on' : ''} title="Card view" onClick={() => setView('grid')}><LayoutGrid size={15} /></button>
           <button className={view === 'list' ? 'on' : ''} title="List view" onClick={() => setView('list')}><List size={15} /></button>
+          <button className={view === 'chart' ? 'on' : ''} title="Org chart" onClick={() => setView('chart')}><Network size={15} /></button>
           <button title="Export CSV" onClick={exportCsv}><Download size={15} /></button>
         </div>
         <b className="tt-count">All Members ({filtered.length})</b>
@@ -149,7 +158,7 @@ export default function Team() {
           ))}
           {!filtered.length && <p className="muted">No team members match.</p>}
         </div>
-      ) : (
+      ) : view === 'list' ? (
         <div className="card table-card">
           <table>
             <thead><tr><th>Name</th><th>Email</th><th>Role</th><th>2FA</th><th>Joined</th></tr></thead>
@@ -165,6 +174,36 @@ export default function Team() {
               ))}
             </tbody>
           </table>
+        </div>
+      ) : (
+        /* ---- Org chart: everyone in the system, level by level ---- */
+        <div className="card" style={{ overflowX: 'auto' }}>
+          <div className="org-chart">
+            <div className="org-node org-root">
+              <img className="org-logo" src="/logo.png" alt="" />
+              <b>{client?.company}</b>
+              <span className="small muted">Company</span>
+            </div>
+            {ORG_LEVELS.map(({ roles: lvlRoles, label }) => {
+              const people = team.filter((t) => lvlRoles.includes(t.role))
+              if (!people.length) return null
+              return (
+                <div className="org-level" key={label}>
+                  <span className="org-trunk" />
+                  <div className="org-level-label">{label}</div>
+                  <div className={`org-row ${people.length > 1 ? 'multi' : ''}`}>
+                    {people.map((t) => (
+                      <div className="org-node" key={t.id} onClick={() => setViewing(t)} title="View member">
+                        <Avatar name={t.name} photo={t.photo} />
+                        <b>{t.name}{t.id === user.id ? ' (you)' : ''}</b>
+                        <span className={`badge ${ROLE_BADGE[t.role] ?? 'gray'}`}>{ROLE_LABEL[t.role] ?? t.role}</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )
+            })}
+          </div>
         </div>
       )}
 

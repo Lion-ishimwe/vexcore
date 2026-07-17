@@ -1547,3 +1547,66 @@ a.plain { color: var(--blue); text-decoration: none; }
 .grace-banner .btn { flex-shrink: 0; }
 .locked-banner { background: #7f1d1d; border-bottom-color: #450a0a; color: #fee2e2; }
 .locked-banner .btn { background: #fff; color: #7f1d1d; }
+
+/* ---- Team org chart: chain of command, top to bottom ---- */
+.org-chart { display: flex; flex-direction: column; align-items: center; padding: 18px 8px 26px; min-width: 560px; }
+.org-level { display: flex; flex-direction: column; align-items: center; width: 100%; }
+.org-trunk { width: 2px; height: 22px; background: #cbd5e1; }
+.org-level-label {
+  font-size: 10px; font-weight: 800; letter-spacing: .13em; text-transform: uppercase;
+  color: var(--muted); background: var(--bg); border: 1px solid var(--border);
+  padding: 3px 12px; border-radius: 999px; margin: 0 0 16px;
+}
+.org-row { position: relative; display: flex; justify-content: center; gap: 20px; flex-wrap: wrap; }
+.org-row.multi::before {
+  content: ''; position: absolute; top: -9px; left: 88px; right: 88px; height: 2px; background: #cbd5e1;
+}
+.org-node {
+  position: relative; width: 156px; background: #fff; border: 1.5px solid var(--border);
+  border-radius: 13px; padding: 14px 10px 12px; display: flex; flex-direction: column;
+  align-items: center; gap: 7px; text-align: center; cursor: pointer;
+  transition: border-color .15s, box-shadow .15s;
+}
+.org-node:hover { border-color: var(--accent); box-shadow: 0 8px 22px -12px rgba(15,23,42,.25); }
+.org-row .org-node::before { content: ''; position: absolute; top: -9px; left: calc(50% - 1px); width: 2px; height: 9px; background: #cbd5e1; }
+.org-node b { font-size: 12.5px; line-height: 1.25; }
+.org-node .avatar { width: 46px; height: 46px; font-size: 15px; }
+.org-root { border-color: var(--accent); cursor: default; width: 190px; }
+.org-logo { width: 40px; height: 40px; border-radius: 10px; object-fit: cover; }
+
+/* ---- Schedule (Gantt) + company letterhead ---- */
+.letterhead {
+  display: flex; align-items: center; gap: 14px; padding-bottom: 14px;
+  border-bottom: 2px solid var(--accent); margin-bottom: 16px;
+}
+.letterhead img { width: 46px; height: 46px; border-radius: 10px; object-fit: cover; }
+.letterhead b { font-size: 16px; display: block; }
+.letterhead > div { display: flex; flex-direction: column; gap: 2px; }
+.gantt-card { overflow-x: auto; }
+.gantt { min-width: 640px; }
+.gantt-row { display: flex; align-items: stretch; }
+.gantt-row + .gantt-row { margin-top: 8px; }
+.gantt-label { width: 190px; flex-shrink: 0; padding-right: 14px; display: flex; flex-direction: column; justify-content: center; }
+.gantt-label b { font-size: 12.5px; line-height: 1.25; }
+.gantt-track { flex: 1; position: relative; background: #f8f9fb; border-radius: 6px; min-height: 30px; }
+.gantt-head .gantt-track { background: none; min-height: 22px; }
+.gantt-month {
+  position: absolute; top: 0; height: 100%; display: flex; align-items: center; justify-content: center;
+  font-size: 10px; font-weight: 800; letter-spacing: .08em; text-transform: uppercase; color: var(--muted);
+  border-left: 1px solid var(--border); overflow: hidden; white-space: nowrap;
+}
+.gantt-line { position: absolute; top: 0; bottom: 0; width: 1px; background: rgba(28,36,48,.06); }
+.gantt-line.month { background: rgba(28,36,48,.16); }
+.gantt-today { position: absolute; top: -2px; bottom: -2px; width: 2px; background: #dc2626; z-index: 2; }
+.gantt-bar {
+  position: absolute; top: 4px; bottom: 4px; border-radius: 6px; z-index: 1;
+  display: flex; align-items: center; justify-content: center;
+  color: #fff; font-size: 10.5px; font-weight: 700;
+  box-shadow: inset 0 -2px 0 rgba(0,0,0,.12);
+}
+.gantt-legend { flex-direction: row !important; gap: 16px; flex-wrap: wrap; margin-top: 14px; }
+@media print {
+  .gantt-card { box-shadow: none; border: none; }
+  .gantt-bar, .gantt-month, .gantt-today, .gantt-line { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+}
+.wb-logo { width: 16px; height: 16px; border-radius: 4px; object-fit: cover; vertical-align: -3px; margin-right: 5px; }

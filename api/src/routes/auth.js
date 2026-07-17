@@ -24,6 +24,7 @@ function sessionPayload(user, client) {
     client: client ? {
       id: client.id, company: client.company, currency: client.currency, tin: client.tin,
       location: client.location, country: client.country, contact: client.contact,
+      logo: client.logo ? '/uploads/' + client.logo : null,
       status: client.status, trialEndsAt: client.trialEndsAt, settings: settingsOf(client),
     } : null,
     subscription: subscriptionOf(client),

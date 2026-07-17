@@ -99,6 +99,9 @@ cd web && npm install && npm run dev                                          # 
 - Documents with folders, visibility rules and a dashboard design slider; weather widget.
 - Team page: card directory with search/filters/CSV export and admin-generated
   **password-reset links**.
+- **Branding** (Settings › Branding): per-company logo upload, applied to everything
+  printed or exported - schedule PDF/Excel letterheads, worker badges and both faces
+  of the ID cards (screen, print and PNG download). Falls back to the platform logo.
 - **Reports hub**: one filter bar (date presets, project, phase) driving five tabs -
   Overview (KPIs, weekly spend chart, budget-vs-actual bars, alerts), Projects & Phases
   (expectation vs reality in money and days, burn-rate forecast at completion, links to
@@ -121,5 +124,5 @@ cd web && npm install && npm run dev                                          # 
 ## Not yet built (planned)
 
 Automated payment provider API (manual MoMo confirm today), customer-facing renewal
-emails/SMS, per-client branding, offline-first PWA sync, visitor log, PDF export
-beyond print, websockets for chat.
+emails/SMS, per-client theme colors (logo branding is live), offline-first PWA sync,
+visitor log, websockets for chat.
