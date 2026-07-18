@@ -103,8 +103,13 @@ export function can(req, cap) {
   return capsFor(req.user, req.client).includes(cap)
 }
 
+// Sessions are sliding 30-minute windows: every authenticated request gets a
+// fresh token (see authRequired), so active users never expire - but 30
+// minutes without any use forces a logout.
+export const SESSION_MINUTES = 30
+
 export function sign(user) {
-  return jwt.sign({ uid: user.id }, SECRET, { expiresIn: '7d' })
+  return jwt.sign({ uid: user.id }, SECRET, { expiresIn: `${SESSION_MINUTES}m` })
 }
 
 // Support mode: the Super Admin opens a company's workspace acting as its
@@ -137,7 +142,7 @@ export async function authRequired(req, res, next) {
   try {
     payload = jwt.verify(token, SECRET)
   } catch {
-    return res.status(401).json({ error: 'Session expired - log in again' })
+    return res.status(401).json({ error: 'Session expired - log in again', sessionExpired: true })
   }
   // Scoped tokens (e.g. 2FA setup) are not full sessions.
   if (payload.scope) return res.status(401).json({ error: 'Not authenticated' })
@@ -182,6 +187,11 @@ export async function authRequired(req, res, next) {
         expired: true,
       })
   }
+  // Sliding renewal: hand back a fresh 30-minute token once the current one is
+  // over a minute old - the web client swaps it in transparently, so the
+  // session only dies after 30 minutes of NO requests at all.
+  if (payload.iat && Date.now() / 1000 - payload.iat > 60)
+    res.setHeader('x-refresh-token', sign(user))
   req.user = user
   req.client = user.client
   next()

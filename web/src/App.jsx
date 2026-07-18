@@ -144,6 +144,25 @@ export default function App() {
   const nav2 = useNavigate()
   const [moreOpen, setMoreOpen] = useState(false)
 
+  // Auto-logout after 30 minutes without any user interaction. Background
+  // polling (chat, alerts) keeps the server token fresh, so THIS timer is
+  // what defines "not in use": no mouse/keyboard/touch for 30 min → logout.
+  useEffect(() => {
+    if (!user) return
+    const IDLE_MS = 30 * 60 * 1000
+    let timer
+    const fire = () => {
+      sessionStorage.setItem('cms_idle_logout', '1')
+      logout()
+      nav2('/login')
+    }
+    const reset = () => { clearTimeout(timer); timer = setTimeout(fire, IDLE_MS) }
+    const events = ['mousemove', 'mousedown', 'keydown', 'touchstart', 'scroll']
+    events.forEach((e) => window.addEventListener(e, reset, { passive: true }))
+    reset()
+    return () => { clearTimeout(timer); events.forEach((e) => window.removeEventListener(e, reset)) }
+  }, [user]) // eslint-disable-line
+
   if (loading) return <div className="locked"><h2>{t('common.loading')}</h2></div>
 
   if (!user) {

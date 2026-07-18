@@ -14,6 +14,10 @@ export async function api(path, { method = 'GET', body, form } = {}) {
     method, headers,
     body: form ? form : body ? JSON.stringify(body) : undefined,
   })
+  // Sliding session: the server hands back a fresh 30-minute token on active
+  // use - swap it in so the session only expires after 30 idle minutes.
+  const fresh = res.headers.get('x-refresh-token')
+  if (fresh && token) setToken(fresh)
   let data = null
   try { data = await res.json() } catch { /* empty body */ }
   if (!res.ok) {
@@ -22,6 +26,13 @@ export async function api(path, { method = 'GET', body, form } = {}) {
     if (res.status === 401 && data?.need2faSetup && token) {
       setToken(null)
       window.location.hash = '#/login' // HashRouter route
+      window.location.reload()
+    }
+    // Token idled past 30 minutes (e.g. browser left closed) → force logout.
+    if (res.status === 401 && data?.sessionExpired && token) {
+      setToken(null)
+      sessionStorage.setItem('cms_idle_logout', '1')
+      window.location.hash = '#/login'
       window.location.reload()
     }
     const err = new Error(data?.error || `Request failed (${res.status})`)

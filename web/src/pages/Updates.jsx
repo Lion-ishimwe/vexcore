@@ -154,10 +154,11 @@ export default function Updates() {
                 <b>{u.by} - {u.project}{u.phase ? ` · ${u.phase}` : ''}</b>
                 <span className="time">
                   {fmtDate(u.createdAt)}
-                  {/* Admin/Guest only ever see forwarded reports - the badge is
-                      only meaningful to the site team tracking what's been sent. */}
-                  {u.forwarded && !['CLIENT', 'GUEST'].includes(user.role) &&
-                    <span className="badge blue" style={{ marginLeft: 8 }}>Forwarded to client</span>}
+                  {/* The badge is only meaningful to the engineers tracking what's
+                      been sent - Admin/Guest only ever see forwarded reports, and
+                      the Stock Manager doesn't handle the forward chain. */}
+                  {u.forwarded && !['CLIENT', 'GUEST', 'STOCK'].includes(user.role) &&
+                    <span className="badge blue" style={{ marginLeft: 8 }}>Forwarded to Admin</span>}
                 </span>
               </div>
               {u.note && <div className="update-note">{u.note}</div>}
@@ -223,7 +224,7 @@ export default function Updates() {
               )}
               {can('updates.forward') && !u.forwarded && (
                 <div style={{ marginTop: 12 }}>
-                  <button className="btn ghost sm" onClick={() => forward(u.id)}><Send size={12} /> Forward to client</button>
+                  <button className="btn ghost sm" onClick={() => forward(u.id)}><Send size={12} /> Forward to Admin</button>
                 </div>
               )}
             </div>

@@ -19,6 +19,14 @@ export default function Login() {
   const [resetInfo, setResetInfo] = useState(null)
   const [reset, setResetV] = useState({ token: '', password: '', confirm: '' })
   const loc = useLocation()
+  // Set when the 30-minute inactivity auto-logout brought the user here.
+  const [idleNotice, setIdleNotice] = useState(false)
+  useEffect(() => {
+    if (sessionStorage.getItem('cms_idle_logout') === '1') {
+      sessionStorage.removeItem('cms_idle_logout')
+      setIdleNotice(true)
+    }
+  }, [])
 
   // Shareable reset link (#/login?reset=TOKEN) - e.g. generated from the Team page.
   useEffect(() => {
@@ -138,6 +146,11 @@ export default function Login() {
              'Reset link generated - choose a new password.'}
           </p>
           <ErrorNote error={error} />
+          {idleNotice && mode === 'login' && (
+            <div className="ok-note" style={{ marginBottom: 12 }}>
+              You were logged out automatically after 30 minutes of inactivity - log in to continue.
+            </div>
+          )}
 
           {mode === 'login' && (
             <form onSubmit={submit}>

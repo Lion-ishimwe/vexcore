@@ -16,7 +16,7 @@ import billingRoutes from './routes/billing.js'
 import miscRoutes from './routes/misc.js'
 
 const app = express()
-app.use(cors())
+app.use(cors({ exposedHeaders: ['x-refresh-token'] }))
 app.use(express.json({ limit: '2mb' }))
 
 // Lightweight performance tracker for the Super Admin system panel: every API
