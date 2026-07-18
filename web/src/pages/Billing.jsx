@@ -7,10 +7,12 @@ import { useAuth } from '../auth.jsx'
 import { Modal, Field, ErrorNote } from '../ui.jsx'
 
 const STATUS_BADGE = { PENDING: 'amber', CONFIRMED: 'green', REJECTED: 'red', CANCELED: 'gray' }
+// Every plan includes the full product - they differ only in project count.
+const ALL_FEATURES = ['Every feature included', 'Full team: engineers, stock managers, guests', 'Attendance, stock, schedule & reports', 'Email notifications & branding']
 const PLAN_BULLETS = {
-  STARTER: ['1 active project', 'Senior Engineer + guests', 'Daily updates & phase tracking', 'Stock management'],
-  PRO: ['Up to 5 active projects', 'Full team: site engineers, stock manager', 'Budget vs actual + variance', 'Chat & PDF reports'],
-  ENTERPRISE: ['Unlimited projects', 'Custom branding (Phase 4)', 'Priority support', 'Custom invoicing'],
+  STARTER: ['1 active project', ...ALL_FEATURES],
+  PRO: ['Up to 5 active projects', ...ALL_FEATURES],
+  ENTERPRISE: ['Unlimited projects', ...ALL_FEATURES],
 }
 
 export default function Billing() {

@@ -15,10 +15,26 @@ async function resolveProject(req, scope) {
   return { projectId: project.id, projectName: project.name }
 }
 
+// Stores assigned to this Stock Manager. Non-empty ⇒ their whole stock view
+// narrows to exactly those stores - they see the stock assigned to them only.
+// Managers with no store assignment keep the normal project-scoped view.
+async function managedStoreIds(req) {
+  if (req.user.role !== 'STOCK') return null
+  const stores = await db.stockStore.findMany({
+    where: { clientId: req.client.id, managerId: req.user.id },
+    select: { id: true },
+  })
+  return stores.length ? stores.map(s => s.id) : null
+}
+
 r.get('/', requireCap('stock.view'), async (req, res) => {
   const ids = await scopedProjectIds(req)
+  const managed = await managedStoreIds(req)
   const items = await db.stockItem.findMany({
-    where: { clientId: req.client.id, ...projectScopeWhere(ids) },
+    where: {
+      clientId: req.client.id,
+      ...(managed ? { storeId: { in: managed } } : projectScopeWhere(ids)),
+    },
     include: { project: { select: { id: true, name: true } }, store: { select: { id: true, name: true } } },
     orderBy: { id: 'asc' },
   })
@@ -36,20 +52,52 @@ r.get('/', requireCap('stock.view'), async (req, res) => {
 
 // ---- Stores: a big project can run several stock stores ----
 
-r.get('/stores', requireCap('stock.view'), async (req, res) => {
-  const ids = await scopedProjectIds(req)
-  const stores = await db.stockStore.findMany({
-    where: { clientId: req.client.id, ...(ids ? { projectId: { in: ids } } : {}) },
-    include: { project: { select: { id: true, name: true } }, _count: { select: { items: true } } },
-    orderBy: [{ projectId: 'asc' }, { name: 'asc' }],
-  })
-  res.json(stores.map(s => ({
-    id: s.id, name: s.name, projectId: s.projectId, projectName: s.project.name,
-    items: s._count.items, createdAt: s.createdAt,
-  })))
+const STORE_INCLUDE = {
+  project: { select: { id: true, name: true } },
+  manager: { select: { id: true, name: true, photo: true } },
+  _count: { select: { items: true } },
+}
+
+const shapeStore = (s) => ({
+  id: s.id, name: s.name, projectId: s.projectId, projectName: s.project.name,
+  managerId: s.managerId, managerName: s.manager?.name ?? null,
+  managerPhoto: s.manager?.photo ? '/uploads/' + s.manager.photo : null,
+  items: s._count?.items ?? 0, createdAt: s.createdAt,
 })
 
-r.post('/stores', requireCap('stock.edit'), async (req, res) => {
+r.get('/stores', requireCap('stock.view'), async (req, res) => {
+  const ids = await scopedProjectIds(req)
+  const managed = await managedStoreIds(req)
+  const stores = await db.stockStore.findMany({
+    where: {
+      clientId: req.client.id,
+      ...(managed ? { id: { in: managed } } : ids ? { projectId: { in: ids } } : {}),
+    },
+    include: STORE_INCLUDE,
+    orderBy: [{ projectId: 'asc' }, { name: 'asc' }],
+  })
+  res.json(stores.map(shapeStore))
+})
+
+// Creating/renaming/deleting stores (and assigning their managers) is the
+// admin's and Senior Engineer's job - Stock Managers work INSIDE a store.
+function storeAdminOnly(req, res, next) {
+  if (['SUPER', 'CLIENT', 'SENIOR'].includes(req.user.role)) return next()
+  res.status(403).json({ error: 'Only the admin or a Senior Engineer can manage stores' })
+}
+
+// A store's manager must be one of the company's Stock Managers.
+async function resolveManager(req) {
+  if (req.body.managerId === undefined) return { skip: true }
+  if (!req.body.managerId) return { managerId: null }
+  const manager = await db.user.findFirst({
+    where: { id: +req.body.managerId, clientId: req.client.id, role: 'STOCK', suspended: false },
+  })
+  if (!manager) return { error: 'The store manager must be one of your Stock Manager accounts' }
+  return { managerId: manager.id, managerName: manager.name }
+}
+
+r.post('/stores', requireCap('stock.edit'), storeAdminOnly, async (req, res) => {
   const name = String(req.body.name ?? '').trim()
   if (!name) return res.status(400).json({ error: 'Store name is required' })
   const scope = await scopedProjectIds(req)
@@ -57,27 +105,41 @@ r.post('/stores', requireCap('stock.edit'), async (req, res) => {
   if (!project || !inScope(scope, project.id)) return res.status(404).json({ error: 'Project not found' })
   const dup = await db.stockStore.findFirst({ where: { projectId: project.id, name } })
   if (dup) return res.status(409).json({ error: `${project.name} already has a store called "${name}"` })
-  const store = await db.stockStore.create({ data: { clientId: req.client.id, projectId: project.id, name } })
-  await audit(req.client.id, req.user.name, 'stock.store.added', `${name} · ${project.name}`)
-  res.json({ id: store.id, name: store.name, projectId: store.projectId, projectName: project.name, items: 0 })
+  const mgr = await resolveManager(req)
+  if (mgr.error) return res.status(400).json({ error: mgr.error })
+  const store = await db.stockStore.create({
+    data: { clientId: req.client.id, projectId: project.id, name, managerId: mgr.skip ? null : mgr.managerId },
+    include: STORE_INCLUDE,
+  })
+  await audit(req.client.id, req.user.name, 'stock.store.added',
+    `${name} · ${project.name}${mgr.managerName ? ' · manager ' + mgr.managerName : ''}`)
+  res.json(shapeStore(store))
 })
 
-r.patch('/stores/:id', requireCap('stock.edit'), async (req, res) => {
+r.patch('/stores/:id', requireCap('stock.edit'), storeAdminOnly, async (req, res) => {
   const scope = await scopedProjectIds(req)
   const store = await db.stockStore.findFirst({ where: { id: +req.params.id, clientId: req.client.id } })
   if (!store || !inScope(scope, store.projectId)) return res.status(404).json({ error: 'Store not found' })
-  const name = String(req.body.name ?? '').trim()
-  if (!name) return res.status(400).json({ error: 'Store name is required' })
-  const dup = await db.stockStore.findFirst({ where: { projectId: store.projectId, name, NOT: { id: store.id } } })
-  if (dup) return res.status(409).json({ error: `This project already has a store called "${name}"` })
-  const updated = await db.stockStore.update({ where: { id: store.id }, data: { name } })
-  await audit(req.client.id, req.user.name, 'stock.store.renamed', `${store.name} → ${name}`)
-  res.json(updated)
+  const data = {}
+  if (req.body.name !== undefined) {
+    const name = String(req.body.name ?? '').trim()
+    if (!name) return res.status(400).json({ error: 'Store name is required' })
+    const dup = await db.stockStore.findFirst({ where: { projectId: store.projectId, name, NOT: { id: store.id } } })
+    if (dup) return res.status(409).json({ error: `This project already has a store called "${name}"` })
+    data.name = name
+  }
+  const mgr = await resolveManager(req)
+  if (mgr.error) return res.status(400).json({ error: mgr.error })
+  if (!mgr.skip) data.managerId = mgr.managerId
+  const updated = await db.stockStore.update({ where: { id: store.id }, data, include: STORE_INCLUDE })
+  await audit(req.client.id, req.user.name, 'stock.store.edited',
+    `${updated.name}${!mgr.skip ? ` · manager ${mgr.managerName ?? 'removed'}` : ''}`)
+  res.json(shapeStore(updated))
 })
 
 // Deleting a store keeps its items - they fall back to the project's
 // unassigned stock, nothing is lost.
-r.delete('/stores/:id', requireCap('stock.edit'), async (req, res) => {
+r.delete('/stores/:id', requireCap('stock.edit'), storeAdminOnly, async (req, res) => {
   const scope = await scopedProjectIds(req)
   const store = await db.stockStore.findFirst({ where: { id: +req.params.id, clientId: req.client.id } })
   if (!store || !inScope(scope, store.projectId)) return res.status(404).json({ error: 'Store not found' })
@@ -88,12 +150,182 @@ r.delete('/stores/:id', requireCap('stock.edit'), async (req, res) => {
   res.json({ ok: true, movedItems: moved.count })
 })
 
+// ---- Inter-store transfers: a store that runs short requests the item from
+// another store that has it. Approval moves the quantity between stores. ----
+
+const TRANSFER_INCLUDE = {
+  item: { select: { id: true, name: true, unit: true, qty: true, category: true } },
+  fromStore: { select: { id: true, name: true, managerId: true, project: { select: { name: true } } } },
+  toStore: { select: { id: true, name: true, project: { select: { name: true } } } },
+  requestedBy: { select: { name: true } },
+}
+
+const shapeTransfer = (t) => ({
+  id: t.id, qty: t.qty, note: t.note, status: t.status,
+  item: { id: t.item.id, name: t.item.name, unit: t.item.unit, available: t.item.qty },
+  from: { id: t.fromStore.id, name: t.fromStore.name, project: t.fromStore.project.name, managerId: t.fromStore.managerId },
+  to: { id: t.toStore.id, name: t.toStore.name, project: t.toStore.project.name },
+  requestedBy: t.requestedBy.name, decidedBy: t.decidedBy, decidedAt: t.decidedAt, createdAt: t.createdAt,
+})
+
+r.get('/transfers', requireCap('stock.view'), async (req, res) => {
+  const ids = await scopedProjectIds(req)
+  const managed = await managedStoreIds(req)
+  const transfers = await db.stockTransfer.findMany({
+    where: {
+      clientId: req.client.id,
+      // Store-scoped manager: transfers touching THEIR stores (either side)
+      // or requested by them; otherwise the usual project scope.
+      ...(managed
+        ? { OR: [{ fromStoreId: { in: managed } }, { toStoreId: { in: managed } }, { requestedById: req.user.id }] }
+        : ids ? { OR: [{ fromStore: { projectId: { in: ids } } }, { toStore: { projectId: { in: ids } } }] } : {}),
+    },
+    include: TRANSFER_INCLUDE,
+    orderBy: { createdAt: 'desc' },
+    take: 100,
+  })
+  res.json(transfers.map(shapeTransfer))
+})
+
+// What OTHER stores hold - the transfer request picker. Deliberately minimal
+// (name/qty/store, no costs) so a store-scoped manager can ask another store
+// for an item without seeing that store's full stock view.
+r.get('/transferable', (req, res, next) => {
+  if (can(req, 'stock.request') || can(req, 'stock.edit')) return next()
+  res.status(403).json({ error: 'No permission: stock.request' })
+}, async (req, res) => {
+  const ids = await scopedProjectIds(req)
+  const managed = await managedStoreIds(req)
+  const items = await db.stockItem.findMany({
+    where: {
+      clientId: req.client.id, qty: { gt: 0 }, NOT: { storeId: null },
+      // any store of any project in the company can be asked - but a
+      // store-scoped manager never needs their OWN items listed
+      ...(managed ? { storeId: { notIn: managed } } : {}),
+    },
+    include: { store: { select: { id: true, name: true, project: { select: { name: true } } } } },
+    orderBy: { name: 'asc' },
+  })
+  res.json(items.map(i => ({
+    id: i.id, name: i.name, unit: i.unit, qty: i.qty,
+    storeId: i.storeId, storeName: i.store.name, projectName: i.store.project.name,
+  })))
+})
+
+r.post('/transfers', (req, res, next) => {
+  if (can(req, 'stock.request') || can(req, 'stock.edit')) return next()
+  res.status(403).json({ error: 'No permission: stock.request' })
+}, async (req, res) => {
+  const qty = Number(req.body.qty)
+  if (!qty || qty <= 0) return res.status(400).json({ error: 'Quantity must be at least 1' })
+  const item = await db.stockItem.findFirst({
+    where: { id: +req.body.itemId, clientId: req.client.id },
+    include: { store: { include: { project: { select: { name: true } } } } },
+  })
+  if (!item || !item.storeId) return res.status(404).json({ error: 'Pick an item held by another store' })
+  const scope = await scopedProjectIds(req)
+  const managed = await managedStoreIds(req)
+  const toStore = await db.stockStore.findFirst({
+    where: { id: +req.body.toStoreId, clientId: req.client.id },
+    include: { project: { select: { name: true } } },
+  })
+  if (!toStore || (managed ? !managed.includes(toStore.id) : !inScope(scope, toStore.projectId)))
+    return res.status(404).json({ error: managed ? 'You can only request items into your own store' : 'Destination store not found' })
+  if (toStore.id === item.storeId) return res.status(400).json({ error: 'That item is already in this store' })
+  if (item.qty < qty) return res.status(400).json({ error: `${item.store.name} only has ${item.qty} ${item.unit} of ${item.name}` })
+  const transfer = await db.stockTransfer.create({
+    data: {
+      clientId: req.client.id, itemId: item.id, fromStoreId: item.storeId, toStoreId: toStore.id,
+      qty, note: String(req.body.note ?? '').trim() || null, requestedById: req.user.id,
+    },
+    include: TRANSFER_INCLUDE,
+  })
+  await audit(req.client.id, req.user.name, 'stock.transfer.requested',
+    `${qty} ${item.unit} ${item.name}: ${item.store.name} → ${toStore.name}`)
+  res.json(shapeTransfer(transfer))
+})
+
+// Decide a transfer: the SOURCE store's manager, or anyone with stock.approve
+// (Senior Engineer / Admin). Approval moves the stock between the stores.
+r.patch('/transfers/:id', requireCap('stock.view'), async (req, res) => {
+  const status = req.body.status
+  if (!['APPROVED', 'REJECTED'].includes(status)) return res.status(400).json({ error: 'Status must be APPROVED or REJECTED' })
+  const transfer = await db.stockTransfer.findFirst({
+    where: { id: +req.params.id, clientId: req.client.id },
+    include: TRANSFER_INCLUDE,
+  })
+  if (!transfer) return res.status(404).json({ error: 'Transfer not found' })
+  if (transfer.status !== 'PENDING') return res.status(400).json({ error: 'This transfer was already decided' })
+  const isSourceManager = transfer.fromStore.managerId === req.user.id
+  if (!isSourceManager && !can(req, 'stock.approve'))
+    return res.status(403).json({ error: `Only ${transfer.fromStore.name}'s manager, a Senior Engineer or the admin can decide this transfer` })
+
+  if (status === 'REJECTED') {
+    const updated = await db.stockTransfer.update({
+      where: { id: transfer.id },
+      data: { status, decidedBy: req.user.name, decidedAt: new Date() },
+      include: TRANSFER_INCLUDE,
+    })
+    await audit(req.client.id, req.user.name, 'stock.transfer.rejected',
+      `${transfer.qty} ${transfer.item.unit} ${transfer.item.name}: ${transfer.fromStore.name} → ${transfer.toStore.name}`)
+    return res.json(shapeTransfer(updated))
+  }
+
+  // Approve: move the quantity. Full-quantity moves relocate the item itself
+  // (keeps serials on machines); partial moves split into the target store's
+  // matching item (same name/unit) or a new one.
+  const result = await db.$transaction(async (tx) => {
+    const item = await tx.stockItem.findUnique({ where: { id: transfer.itemId } })
+    if (!item || item.storeId !== transfer.fromStoreId) throw new Error('The item is no longer in the source store')
+    if (item.qty < transfer.qty) throw new Error(`${transfer.fromStore.name} only has ${item.qty} ${item.unit} left`)
+    const toStore = await tx.stockStore.findUnique({ where: { id: transfer.toStoreId } })
+    if (!toStore) throw new Error('The destination store no longer exists')
+
+    if (item.qty === transfer.qty) {
+      await tx.stockItem.update({
+        where: { id: item.id },
+        data: { storeId: toStore.id, projectId: toStore.projectId },
+      })
+    } else {
+      await tx.stockItem.update({ where: { id: item.id }, data: { qty: { decrement: transfer.qty } } })
+      const target = await tx.stockItem.findFirst({
+        where: { clientId: transfer.clientId, storeId: toStore.id, name: item.name, unit: item.unit },
+      })
+      if (target) await tx.stockItem.update({ where: { id: target.id }, data: { qty: { increment: transfer.qty } } })
+      else await tx.stockItem.create({
+        data: {
+          clientId: transfer.clientId, projectId: toStore.projectId, storeId: toStore.id,
+          name: item.name, category: item.category, qty: transfer.qty, unit: item.unit,
+          unitCost: item.unitCost, lowThreshold: item.lowThreshold,
+        },
+      })
+    }
+    return tx.stockTransfer.update({
+      where: { id: transfer.id },
+      data: { status: 'APPROVED', decidedBy: req.user.name, decidedAt: new Date() },
+      include: TRANSFER_INCLUDE,
+    })
+  }).catch((e) => ({ error: e.message }))
+  if (result.error) return res.status(400).json({ error: result.error })
+
+  // The source store may have just crossed its low-stock threshold.
+  const after = await db.stockItem.findUnique({ where: { id: transfer.itemId } })
+  if (after && after.storeId === transfer.fromStoreId)
+    checkLowStock(req.client, after, after.qty + transfer.qty)
+
+  await audit(req.client.id, req.user.name, 'stock.transfer.approved',
+    `${transfer.qty} ${transfer.item.unit} ${transfer.item.name}: ${transfer.fromStore.name} → ${transfer.toStore.name}`)
+  res.json(shapeTransfer(result))
+})
+
 // Resolve an optional storeId: must belong to the client and be in scope; the
 // item's project is then taken FROM the store (a store pins the project).
+// A store's own manager always reaches it, whatever their project scope.
 async function resolveStore(req, scope) {
   if (!req.body.storeId) return { storeId: null }
   const store = await db.stockStore.findFirst({ where: { id: +req.body.storeId, clientId: req.client.id } })
-  if (!store || !inScope(scope, store.projectId)) return { error: 'Store not found' }
+  if (!store || (store.managerId !== req.user.id && !inScope(scope, store.projectId)))
+    return { error: 'Store not found' }
   return { storeId: store.id, projectId: store.projectId, storeName: store.name }
 }
 
@@ -107,6 +339,16 @@ r.post('/', requireCap('stock.edit'), async (req, res) => {
   if (proj.error) return res.status(404).json({ error: proj.error })
   const store = await resolveStore(req, scope)
   if (store.error) return res.status(404).json({ error: store.error })
+  // A store-scoped manager inserts into their own store(s) only.
+  const managedIns = await managedStoreIds(req)
+  if (managedIns) {
+    if (!store.storeId && managedIns.length === 1) {
+      const own = await db.stockStore.findUnique({ where: { id: managedIns[0] } })
+      store.storeId = own.id; store.projectId = own.projectId; store.storeName = own.name
+    }
+    if (!store.storeId || !managedIns.includes(store.storeId))
+      return res.status(403).json({ error: 'You can only add products to your own store' })
+  }
   const item = await db.stockItem.create({
     data: {
       clientId: req.client.id,
@@ -133,6 +375,16 @@ r.post('/bulk', requireCap('stock.edit'), async (req, res) => {
   if (proj.error) return res.status(404).json({ error: proj.error })
   const store = await resolveStore(req, scope)
   if (store.error) return res.status(404).json({ error: store.error })
+  // A store-scoped manager bulk-inserts into their own store(s) only.
+  const managedBulk = await managedStoreIds(req)
+  if (managedBulk) {
+    if (!store.storeId && managedBulk.length === 1) {
+      const own = await db.stockStore.findUnique({ where: { id: managedBulk[0] } })
+      store.storeId = own.id; store.projectId = own.projectId; store.storeName = own.name
+    }
+    if (!store.storeId || !managedBulk.includes(store.storeId))
+      return res.status(403).json({ error: 'You can only add products to your own store' })
+  }
 
   const valid = []
   const skipped = []
@@ -164,9 +416,14 @@ r.post('/bulk', requireCap('stock.edit'), async (req, res) => {
 
 r.patch('/:id', requireCap('stock.edit'), async (req, res) => {
   const scope = await scopedProjectIds(req)
+  const managed = await managedStoreIds(req)
   const item = await db.stockItem.findFirst({ where: { id: +req.params.id, clientId: req.client.id } })
-  if (!item || (item.projectId && !inScope(scope, item.projectId)))
-    return res.status(404).json({ error: 'Item not found' })
+  // A store assignment IS the manager's scope - their own store's items are
+  // always reachable; everyone else keeps the project-scope rule.
+  const reachable = item && (managed
+    ? managed.includes(item.storeId)
+    : !item.projectId || inScope(scope, item.projectId))
+  if (!reachable) return res.status(404).json({ error: 'Item not found' })
   const data = {}
   for (const k of ['name', 'unit', 'serial']) if (req.body[k] !== undefined) data[k] = req.body[k]
   for (const k of ['qty', 'unitCost', 'lowThreshold']) if (req.body[k] !== undefined) data[k] = Number(req.body[k]) || 0
@@ -225,9 +482,16 @@ r.post('/issues', requireCap('stock.issue'), async (req, res) => {
     if (id && qty > 0) wanted.set(id, (wanted.get(id) ?? 0) + qty)
   }
   if (!wanted.size) return res.status(400).json({ error: 'Add at least one item' })
+  const managedIssue = await managedStoreIds(req)
   const draws = []
   for (const [stockItemId, qty] of wanted) {
-    const item = await db.stockItem.findFirst({ where: { id: stockItemId, clientId: req.client.id } })
+    const item = await db.stockItem.findFirst({
+      where: {
+        id: stockItemId, clientId: req.client.id,
+        // a store-scoped manager only hands out their own store's stock
+        ...(managedIssue ? { storeId: { in: managedIssue } } : {}),
+      },
+    })
     if (!item) return res.status(400).json({ error: 'An item is no longer in stock' })
     if (item.qty < qty) return res.status(400).json({ error: `Only ${item.qty} ${item.unit} of ${item.name} in stock` })
     draws.push({ item, qty })
@@ -262,8 +526,19 @@ r.post('/issues', requireCap('stock.issue'), async (req, res) => {
 
 r.get('/issues', requireCap('stock.view'), async (req, res) => {
   const showMoney = can(req, 'stock.amounts')
+  const managed = await managedStoreIds(req)
   const issues = await db.stockIssue.findMany({
-    where: { clientId: req.client.id },
+    where: {
+      clientId: req.client.id,
+      // store-scoped manager: their own hand-outs + any issue drawing from
+      // their stores' items
+      ...(managed ? {
+        OR: [
+          { issuedById: req.user.id },
+          { items: { some: { stockItem: { storeId: { in: managed } } } } },
+        ],
+      } : {}),
+    },
     include: {
       items: true,
       issuedBy: { select: { name: true } },

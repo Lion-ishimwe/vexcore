@@ -1,10 +1,13 @@
 // Subscription plans - the server-side source of truth for pricing and limits.
-// Prices are RWF per month. `projects` = max active (non-Done) projects;
-// `roles` = team roles the plan may create. null = unlimited.
+// Prices are RWF per month. EVERY plan gets the full feature set and full
+// team roles - plans differ ONLY in how many active (non-Done) projects they
+// allow (null = unlimited). Feature gating per plan may return once we know
+// the market better.
+const ALL_ROLES = ['SENIOR', 'SITE', 'STOCK', 'GUEST']
 export const PLANS = {
-  STARTER: { name: 'Starter', price: 30_000, currency: 'RWF', projects: 1, roles: ['SENIOR', 'GUEST'] },
-  PRO: { name: 'Pro', price: 80_000, currency: 'RWF', projects: 5, roles: ['SENIOR', 'SITE', 'STOCK', 'GUEST'] },
-  ENTERPRISE: { name: 'Enterprise', price: null, currency: 'RWF', projects: null, roles: ['SENIOR', 'SITE', 'STOCK', 'GUEST'] },
+  STARTER: { name: 'Starter', price: 30_000, currency: 'RWF', projects: 1, roles: ALL_ROLES },
+  PRO: { name: 'Pro', price: 80_000, currency: 'RWF', projects: 5, roles: ALL_ROLES },
+  ENTERPRISE: { name: 'Enterprise', price: 100_000, currency: 'RWF', projects: null, roles: ALL_ROLES },
 }
 
 // Where subscribers send the money (manual MoMo flow until a payment API is wired in).

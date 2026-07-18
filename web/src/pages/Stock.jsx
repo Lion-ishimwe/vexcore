@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { Lock, FileSpreadsheet, Upload, CheckCircle2, CreditCard, PackageCheck, X, Camera, CameraOff, Warehouse, Pencil, Trash2 } from 'lucide-react'
+import { Lock, FileSpreadsheet, Upload, CheckCircle2, CreditCard, PackageCheck, X, Camera, CameraOff, Warehouse, Pencil, Trash2, ArrowLeftRight } from 'lucide-react'
 import { api, fmtMoney, fmtDate } from '../api.js'
 import { useAuth } from '../auth.jsx'
 import { Modal, Field, ErrorNote, Avatar, useForm } from '../ui.jsx'
@@ -17,10 +17,15 @@ export default function Stock() {
   const [formError, setFormError] = useState(null)
   const [projects, setProjects] = useState([])
   const [projF, setProjF] = useState('') // '' all | 'general' | project id
-  // stores: a big project can run several stock stores
+  // stores: a big project can run several stock stores, each with its manager
   const [stores, setStores] = useState([])
   const [storeF, setStoreF] = useState('') // '' all | 'none' unassigned | store id
-  const [storeForm, setStoreForm] = useState({ projectId: '', name: '' })
+  const [storeForm, setStoreForm] = useState({ projectId: '', name: '', managerId: '' })
+  const [members, setMembers] = useState([]) // for the store-manager picker
+  // inter-store transfers: a store that runs short requests from one that has it
+  const [transfers, setTransfers] = useState([])
+  const [transferable, setTransferable] = useState([]) // other stores' items (minimal view)
+  const [tv, tset, tsetAll] = useForm({ itemId: '', toStoreId: '', qty: '', note: '' })
   // bulk upload
   const bulkRef = useRef(null)
   const [bulkProjId, setBulkProjId] = useState('')
@@ -42,11 +47,16 @@ export default function Stock() {
   const canApprove = can('stock.approve')
   const canRequest = can('stock.request') || canEdit
   const isStockMgr = user.role === 'STOCK'
+  // Stores are created and assigned by the admin / Senior Engineers only.
+  const canManageStores = ['CLIENT', 'SENIOR', 'SUPER'].includes(user.role)
   const cur = client?.currency
 
   const load = () => {
     api('/stock').then(setItems).catch((e) => setError(e.message))
     api('/stock/stores').then(setStores).catch(() => {})
+    api('/stock/transfers').then(setTransfers).catch(() => {})
+    api('/stock/transferable').then(setTransferable).catch(() => {})
+    api('/members').then((ms) => setMembers(ms.filter((m) => m.role === 'STOCK'))).catch(() => {})
     api('/stock/requests').then(setRequests).catch(() => {})
     api('/stock/issues').then(setIssues).catch(() => {})
     if (can('damaged.view')) api('/stock/damaged').then(setDamaged).catch(() => {})
@@ -82,10 +92,33 @@ export default function Stock() {
     e.preventDefault(); setFormError(null)
     try {
       await api('/stock/stores', { method: 'POST', body: storeForm })
-      setStoreForm({ projectId: storeForm.projectId, name: '' })
+      setStoreForm({ projectId: storeForm.projectId, name: '', managerId: '' })
       load()
     } catch (err) { setFormError(err.message) }
   }
+  const setStoreManager = async (s, managerId) => {
+    setFormError(null)
+    try { await api(`/stock/stores/${s.id}`, { method: 'PATCH', body: { managerId } }); load() }
+    catch (err) { setFormError(err.message) }
+  }
+
+  // ---- Transfers ----
+  const myStore = stores.find((s) => s.managerId === user.id) // the store I manage, if any
+  const requestTransfer = async (e) => {
+    e.preventDefault(); setFormError(null)
+    try {
+      await api('/stock/transfers', { method: 'POST', body: tv })
+      setModal(null); tsetAll({ itemId: '', toStoreId: '', qty: '', note: '' })
+      load()
+    } catch (err) { setFormError(err.message) }
+  }
+  const decideTransfer = async (t, status) => {
+    setError(null)
+    try { await api(`/stock/transfers/${t.id}`, { method: 'PATCH', body: { status } }); load() }
+    catch (err) { setError(err.message) }
+  }
+  // Who may decide: the source store's manager, or stock.approve (senior/admin)
+  const canDecide = (t) => t.status === 'PENDING' && (can('stock.approve') || t.from.managerId === user.id)
   const renameStore = async (s) => {
     const name = window.prompt(`Rename store "${s.name}" to:`, s.name)
     if (!name || name.trim() === s.name) return
@@ -232,6 +265,11 @@ export default function Stock() {
           {can('stock.issue') && (
             <button className="btn" onClick={openIssue}><PackageCheck size={14} /> Issue items</button>
           )}
+          {canRequest && transferable.length > 0 && stores.length > 0 && (
+            <button className="btn ghost sm" onClick={() => { setFormError(null); tsetAll({ itemId: '', toStoreId: myStore ? String(myStore.id) : '', qty: '', note: '' }); setModal('transfer') }}>
+              <ArrowLeftRight size={13} /> Request from another store
+            </button>
+          )}
           {canRequest && !canEdit && <button className="btn" onClick={() => setModal('request')}>+ Request Item</button>}
           {canEdit && <>
             <button className="btn ghost sm" onClick={() => setModal('request')}>+ Request</button>
@@ -252,7 +290,11 @@ export default function Stock() {
         <div className="card">
           <h3>Low-stock alerts</h3>
           <div className="big" style={{ color: lowCount ? 'var(--red)' : 'var(--green)' }}>{lowCount}</div>
-          <div className="sub">{items.filter((i) => i.low).map((i) => i.name).join(' · ') || 'All levels OK'}</div>
+          <div className="sub">
+            {items.filter((i) => i.low)
+              .map((i) => i.storeName ? `${i.name} (${i.storeName})` : i.name)
+              .join(' · ') || 'All levels OK'}
+          </div>
         </div>
         <div className="card">
           <h3>Pending requests</h3>
@@ -278,7 +320,7 @@ export default function Stock() {
           </select>
         )}
         <div style={{ flex: 1 }} />
-        {canEdit && (
+        {canManageStores && canEdit && (
           <button className="btn ghost sm" onClick={() => { setFormError(null); setModal('stores') }}>
             <Warehouse size={13} /> Stores{stores.length ? ` (${stores.length})` : ''}
           </button>
@@ -372,6 +414,43 @@ export default function Stock() {
           )}
         </div>
       </div>
+
+      {transfers.length > 0 && (
+        <>
+          <div className="section-title" style={{ marginTop: 16 }}>Store transfers</div>
+          <div className="card table-card">
+            <table>
+              <thead>
+                <tr><th>When</th><th>Item</th><th>From</th><th>To</th><th>Requested by</th><th>Status</th></tr>
+              </thead>
+              <tbody>
+                {transfers.map((t) => (
+                  <tr key={t.id}>
+                    <td className="muted" style={{ whiteSpace: 'nowrap' }}>{fmtDate(t.createdAt)}</td>
+                    <td><b>{t.qty.toLocaleString()} {t.item.unit} × {t.item.name}</b>{t.note && <div className="small muted">“{t.note}”</div>}</td>
+                    <td className="muted">{t.from.name}<div className="small">{t.from.project}</div></td>
+                    <td className="muted">{t.to.name}<div className="small">{t.to.project}</div></td>
+                    <td className="muted">{t.requestedBy}</td>
+                    <td>
+                      {canDecide(t) ? (
+                        <div style={{ display: 'flex', gap: 5 }}>
+                          <button className="btn sm" onClick={() => decideTransfer(t, 'APPROVED')}>Approve</button>
+                          <button className="btn ghost sm" onClick={() => decideTransfer(t, 'REJECTED')}>Reject</button>
+                        </div>
+                      ) : (
+                        <span className={`badge ${t.status === 'APPROVED' ? 'green' : t.status === 'PENDING' ? 'amber' : 'red'}`}
+                          title={t.decidedBy ? `by ${t.decidedBy}` : ''}>
+                          {t.status.charAt(0) + t.status.slice(1).toLowerCase()}
+                        </span>
+                      )}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </>
+      )}
 
       <div className="section-title" style={{ marginTop: 16 }}>Issued items - proof of consumption</div>
       <div className="card table-card">
@@ -566,12 +645,52 @@ export default function Stock() {
         </Modal>
       )}
 
+      {modal === 'transfer' && (
+        <Modal title="Request items from another store" onClose={() => setModal(null)}>
+          <ErrorNote error={formError} />
+          <p className="small muted" style={{ marginBottom: 10 }}>
+            Short of something? Ask a store that still has it. The transfer moves the stock
+            once that store's manager (or a Senior Engineer / the admin) approves.
+          </p>
+          <form onSubmit={requestTransfer}>
+            <Field label="Item (held by another store) *">
+              <select value={tv.itemId} required onChange={tset('itemId')}>
+                <option value="">- Select item -</option>
+                {transferable.filter((i) => !tv.toStoreId || i.storeId !== +tv.toStoreId).map((i) => (
+                  <option key={i.id} value={i.id}>
+                    {i.name} · {i.qty.toLocaleString()} {i.unit} in {i.storeName} ({i.projectName})
+                  </option>
+                ))}
+              </select>
+            </Field>
+            <Field label="Deliver to store *">
+              <select value={tv.toStoreId} required onChange={tset('toStoreId')}>
+                <option value="">- Select store -</option>
+                {stores
+                  .filter((s) => s.id !== transferable.find((i) => i.id === +tv.itemId)?.storeId)
+                  .map((s) => <option key={s.id} value={s.id}>{s.name} ({s.projectName}){s.managerId === user.id ? ' - my store' : ''}</option>)}
+              </select>
+            </Field>
+            <Field label="Quantity *">
+              <input type="number" min="1" value={tv.qty} onChange={tset('qty')} required />
+            </Field>
+            <Field label="Note (optional)">
+              <input value={tv.note} onChange={tset('note')} placeholder="e.g. block B ran out of cement" />
+            </Field>
+            <button className="btn" style={{ width: '100%', justifyContent: 'center' }}>
+              <ArrowLeftRight size={14} /> Submit transfer request
+            </button>
+          </form>
+        </Modal>
+      )}
+
       {modal === 'stores' && (
         <Modal title="Stock stores" onClose={() => setModal(null)}>
           <ErrorNote error={formError} />
           <p className="small muted" style={{ marginBottom: 10 }}>
             A big project can run more than one store (e.g. <i>Main yard</i>, <i>Block B store</i>).
-            Stock items can then be placed in a specific store of the project.
+            Each store can have its own Stock Manager, responsible for it and for approving
+            transfer requests from other stores.
           </p>
           <form onSubmit={addStore}>
             <div className="item-add">
@@ -582,17 +701,29 @@ export default function Stock() {
               </select>
               <input value={storeForm.name} required placeholder="Store name"
                 onChange={(e) => setStoreForm((s) => ({ ...s, name: e.target.value }))} />
+              <select value={storeForm.managerId}
+                onChange={(e) => setStoreForm((s) => ({ ...s, managerId: e.target.value }))}>
+                <option value="">- Manager (optional) -</option>
+                {members.map((m) => <option key={m.id} value={m.id}>{m.name}</option>)}
+              </select>
               <button className="btn sm"><Warehouse size={13} /> Add store</button>
             </div>
           </form>
           <div className="card table-card" style={{ marginTop: 12 }}>
             <table>
-              <thead><tr><th>Store</th><th>Project</th><th>Items</th><th></th></tr></thead>
+              <thead><tr><th>Store</th><th>Project</th><th>Manager</th><th>Items</th><th></th></tr></thead>
               <tbody>
                 {stores.map((s) => (
                   <tr key={s.id}>
                     <td><b>{s.name}</b></td>
                     <td className="muted">{s.projectName}</td>
+                    <td>
+                      <select value={s.managerId ?? ''} onChange={(e) => setStoreManager(s, e.target.value)}
+                        style={{ padding: '4px 8px', borderRadius: 6, border: '1px solid var(--border)', fontSize: 12 }}>
+                        <option value="">- none -</option>
+                        {members.map((m) => <option key={m.id} value={m.id}>{m.name}</option>)}
+                      </select>
+                    </td>
                     <td>{s.items}</td>
                     <td>
                       <div style={{ display: 'flex', gap: 6, justifyContent: 'flex-end' }}>
@@ -602,7 +733,7 @@ export default function Stock() {
                     </td>
                   </tr>
                 ))}
-                {!stores.length && <tr><td colSpan="4" className="muted">No stores yet - each project can have one or more.</td></tr>}
+                {!stores.length && <tr><td colSpan="5" className="muted">No stores yet - each project can have one or more.</td></tr>}
               </tbody>
             </table>
           </div>

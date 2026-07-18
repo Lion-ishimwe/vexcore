@@ -712,7 +712,8 @@ r.post('/sessions/:id/tick', requireCap('attendance.record'), async (req, res) =
 
 // ---- Phase 2: integrations ----
 
-// Today's live head-count for a project/phase - pre-fills daily updates.
+// Today's live head-count for a project/phase - feeds daily updates
+// automatically: who attended, their worker type, and which phase.
 r.get('/counts', requireCap('attendance.view'), async (req, res) => {
   await rolloverStale(req.client)
   const where = {
@@ -721,20 +722,29 @@ r.get('/counts', requireCap('attendance.view'), async (req, res) => {
     ...(req.query.phaseId ? { phaseId: +req.query.phaseId } : {}),
   }
   const sessions = await db.attendanceSession.findMany({
-    where, include: { records: { include: { worker: { select: { type: true } } } } },
+    where,
+    include: {
+      phase: { select: { name: true } },
+      records: { include: { worker: { select: { id: true, name: true, type: true } } } },
+    },
   })
   const seen = new Set()
   let builders = 0, helpers = 0
+  const byType = {}
+  const workers = []
   for (const s of sessions) {
     for (const rec of s.records) {
       if (!rec.worker) continue // team-member scans are not crew head-count
       if (!rec.clockInAt || seen.has(rec.workerId)) continue
       seen.add(rec.workerId)
-      if (rec.worker.type === 'helper') helpers++
+      const type = rec.worker.type
+      byType[type] = (byType[type] ?? 0) + 1
+      if (type === 'helper') helpers++
       else builders++
+      workers.push({ name: rec.worker.name, type, phase: s.phase?.name ?? null })
     }
   }
-  res.json({ builders, helpers })
+  res.json({ builders, helpers, byType, workers })
 })
 
 // Attendance report over a date range → rows per worker, columns per day.

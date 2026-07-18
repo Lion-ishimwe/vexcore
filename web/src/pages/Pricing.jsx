@@ -1,10 +1,12 @@
 import { Link } from 'react-router-dom'
 import { PubNav, PubFoot } from './GetStarted.jsx'
 
+// Every plan includes the full product - they differ only in project count.
+const EVERY = ['Every feature included', 'Full team: engineers, stock managers, guests', 'Attendance, stock, schedule & reports', 'Chat, PDF reports & email alerts']
 const TIERS = [
-  { name: 'Starter', price: '30,000 RWF', per: '/month', bullet: ['1 active project', 'Senior Engineer working solo', 'Daily updates & phase tracking', 'Stock management'], cta: 'Start Trial' },
-  { name: 'Pro', price: '80,000 RWF', per: '/month', highlight: true, bullet: ['Up to 5 active projects', 'Full team: site engineers, stock manager, guests', 'Budget vs actual + variance alerts', 'Chat with attachments', 'PDF reports'], cta: 'Start Trial' },
-  { name: 'Enterprise', price: 'Custom', per: '', bullet: ['Unlimited projects', 'Custom branding', 'Priority support', 'MTN MoMo / Airtel / card billing'], cta: 'Contact us' },
+  { name: 'Starter', price: '30,000 RWF', per: '/month', bullet: ['1 active project', ...EVERY], cta: 'Start Trial' },
+  { name: 'Pro', price: '80,000 RWF', per: '/month', highlight: true, bullet: ['Up to 5 active projects', ...EVERY], cta: 'Start Trial' },
+  { name: 'Enterprise', price: '100,000 RWF', per: '/month', bullet: ['Unlimited projects', ...EVERY], cta: 'Start Trial' },
 ]
 
 export default function Pricing() {
@@ -28,7 +30,7 @@ export default function Pricing() {
               <div className="small" style={{ lineHeight: 2 }}>
                 {t.bullet.map((b) => <div key={b}>✓ {b}</div>)}
               </div>
-              <Link to={t.name === 'Enterprise' ? '/support' : '/signup'} className="btn" style={{ marginTop: 16, width: '100%', justifyContent: 'center' }}>
+              <Link to="/signup" className="btn" style={{ marginTop: 16, width: '100%', justifyContent: 'center' }}>
                 {t.cta}
               </Link>
             </div>

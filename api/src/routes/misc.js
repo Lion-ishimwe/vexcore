@@ -267,7 +267,10 @@ r.get('/dashboard', requireCap('dashboard'), async (req, res) => {
       where: { project: { clientId: cid }, ...(ids ? { projectId: { in: ids } } : {}) },
       include: { materials: true, updates: true, project: { select: { name: true } } },
     }),
-    db.stockItem.findMany({ where: { clientId: cid, ...projectScopeWhere(ids) } }),
+    db.stockItem.findMany({
+      where: { clientId: cid, ...projectScopeWhere(ids) },
+      include: { store: { select: { name: true } } },
+    }),
     // Items reported as used in daily updates - deducted from stock on submit.
     db.updateMaterial.findMany({
       where: { update: { clientId: cid, ...(ids ? { projectId: { in: ids } } : {}) } },
@@ -356,7 +359,9 @@ r.get('/dashboard', requireCap('dashboard'), async (req, res) => {
     totalBudget: showMoney ? totalBudget : null,
     stockValue: showMoney ? stockValue : null,
     stockUsedPct,
-    lowStock: stockItems.filter(i => i.lowThreshold > 0 && i.qty <= i.lowThreshold).map(i => i.name),
+    // Shortage alerts name the store that is short, not just the item.
+    lowStock: stockItems.filter(i => i.lowThreshold > 0 && i.qty <= i.lowThreshold)
+      .map(i => i.store ? `${i.name} (${i.store.name})` : i.name),
     phaseBars: phases.slice(0, 8).map(p => ({ name: p.name, project: p.project.name, percent: p.percent })),
     latestUpdates: updates.map(u => ({
       id: u.id, by: u.user.name, byPhoto: u.user.photo ? '/uploads/' + u.user.photo : null,
@@ -579,6 +584,42 @@ r.get('/reports', requireCap('reports'), async (req, res) => {
   const presence = [...presentByDay.entries()].sort(([a], [b]) => a.localeCompare(b))
     .map(([day, set]) => ({ day, present: set.size, absent: Math.max(0, totalWorkers - set.size) }))
 
+  // ---- Per-store breakdown: each store shows its own holdings and usage;
+  // the project rows above already combine every store of the project. ----
+  const stores = await db.stockStore.findMany({
+    where: { clientId: cid, ...(ids ? { projectId: { in: ids } } : {}), ...(pFilter ? { projectId: pFilter } : {}) },
+    include: { project: { select: { name: true } }, manager: { select: { name: true } } },
+    orderBy: [{ projectId: 'asc' }, { name: 'asc' }],
+  })
+  let storeRows = []
+  if (stores.length) {
+    const [issueUse, updateUse, drawUse] = await Promise.all([
+      db.stockIssueItem.findMany({ where: { issue: { clientId: cid, createdAt: { gte: from, lte: to } } } }),
+      db.updateMaterial.findMany({ where: { createdAt: { gte: from, lte: to }, update: { clientId: cid } } }),
+      db.phaseMaterial.findMany({ where: { createdAt: { gte: from, lte: to }, phase: { project: { clientId: cid } } } }),
+    ])
+    const storeOf = new Map(stockItems.map(i => [i.id, i.storeId])) // current home of each item
+    const agg = new Map(stores.map(s => [s.id, { issued: 0, reported: 0, drawn: 0 }]))
+    const add = (rows, field) => {
+      for (const m of rows) {
+        const sid = m.stockItemId ? storeOf.get(m.stockItemId) : null
+        if (sid && agg.has(sid)) agg.get(sid)[field] += m.qty * m.unitCostSnap
+      }
+    }
+    add(issueUse, 'issued'); add(updateUse, 'reported'); add(drawUse, 'drawn')
+    storeRows = stores.map(s => {
+      const mine = stockItems.filter(i => i.storeId === s.id)
+      const used = agg.get(s.id)
+      return {
+        id: s.id, name: s.name, project: s.project.name, manager: s.manager?.name ?? null,
+        items: mine.length,
+        stockValue: mine.reduce((sum, i) => sum + i.qty * i.unitCost, 0),
+        lowStock: mine.filter(i => i.lowThreshold > 0 && i.qty <= i.lowThreshold).map(i => i.name),
+        used: { ...used, total: used.issued + used.reported + used.drawn },
+      }
+    })
+  }
+
   res.json({
     from: dayKey(from), to: dayKey(to),
     projects: projectRows,
@@ -601,6 +642,7 @@ r.get('/reports', requireCap('reports'), async (req, res) => {
       lowStock: stockItems.filter(i => i.lowThreshold > 0 && i.qty <= i.lowThreshold).map(i => i.name),
       damaged: damagedCount,
       pendingRequests,
+      stores: storeRows,
     },
   })
 })

@@ -14,7 +14,7 @@ export default function Updates() {
   const [projects, setProjects] = useState([])
   const [error, setError] = useState(null)
   const [creating, setCreating] = useState(false)
-  const [v, set, setAll] = useForm({ projectId: '', phaseId: '', builders: '', helpers: '', note: '' })
+  const [v, set, setAll] = useForm({ projectId: '', phaseId: '', note: '' })
   const [files, setFiles] = useState([])
   const [formError, setFormError] = useState(null)
   const [busy, setBusy] = useState(false)
@@ -23,6 +23,11 @@ export default function Updates() {
   const [stock, setStock] = useState([]) // pickable stock for "items used"
   const [items, setItems] = useState([]) // { stockItemId, name, unit, qty }
   const [draft, setDraft] = useState({ stockItemId: '', qty: '' })
+  // Crew on site: pulled automatically from today's attendance (per worker
+  // type), plus manual rows for extra types working the same day.
+  const workerTypes = client?.settings?.workerTypes ?? ['builder', 'helper']
+  const [crew, setCrew] = useState([]) // { type, count, auto }
+  const [crewDraft, setCrewDraft] = useState({ type: '', count: '' })
 
   useEffect(() => {
     if (!creating) return
@@ -32,13 +37,23 @@ export default function Updates() {
   // Switching project invalidates project-scoped stock picks.
   useEffect(() => { setItems([]); setDraft({ stockItemId: '', qty: '' }) }, [v.projectId])
 
+  // Workers pull in automatically from the attendance feature: per-type
+  // counts become editable crew rows; the attended names + phases are shown.
   useEffect(() => {
     setAttCounts(null)
+    setCrew((rows) => rows.filter((r) => !r.auto)) // project/phase changed → drop old auto rows
     if (!creating || !v.projectId) return
     const q = new URLSearchParams({ projectId: v.projectId })
     if (v.phaseId) q.set('phaseId', v.phaseId)
     api('/attendance/counts?' + q)
-      .then((c) => setAttCounts(c.builders + c.helpers > 0 ? c : null))
+      .then((c) => {
+        if (!(c.workers ?? []).length) return
+        setAttCounts(c)
+        setCrew((rows) => [
+          ...Object.entries(c.byType ?? {}).map(([type, count]) => ({ type, count, auto: true })),
+          ...rows.filter((r) => !r.auto && !c.byType?.[r.type]),
+        ])
+      })
       .catch(() => {})
   }, [creating, v.projectId, v.phaseId])
 
@@ -71,11 +86,13 @@ export default function Updates() {
           () => resolve(null), { timeout: 3000 })
       })
       if (geo) form.append('geotag', geo)
+      if (crew.length) form.append('crew', JSON.stringify(crew.map((c) => ({ type: c.type, count: c.count }))))
       if (items.length) form.append('items', JSON.stringify(items.map((i) => ({ stockItemId: i.stockItemId, qty: i.qty }))))
       for (const f of files) form.append('media', f)
       await api('/projects/updates', { method: 'POST', form })
-      setCreating(false); setAll({ projectId: '', phaseId: '', builders: '', helpers: '', note: '' }); setFiles([])
+      setCreating(false); setAll({ projectId: '', phaseId: '', note: '' }); setFiles([])
       setItems([]); setDraft({ stockItemId: '', qty: '' })
+      setCrew([]); setCrewDraft({ type: '', count: '' })
       load()
     } catch (err) { setFormError(err.message) } finally { setBusy(false) }
   }
@@ -107,6 +124,20 @@ export default function Updates() {
     setDraft({ stockItemId: '', qty: '' })
   }
 
+  // Extra crew row: a worker type (from Settings) + how many were on site.
+  const addCrew = () => {
+    const type = crewDraft.type
+    const count = Number(crewDraft.count)
+    if (!type || !count || count <= 0) return
+    setCrew((list) => {
+      const existing = list.find((c) => c.type === type)
+      return existing
+        ? list.map((c) => c.type === type ? { ...c, count: c.count + count } : c)
+        : [...list, { type, count }]
+    })
+    setCrewDraft({ type: '', count: '' })
+  }
+
   return (
     <>
       <div className="flex-between" style={{ marginBottom: 16 }}>
@@ -131,8 +162,18 @@ export default function Updates() {
               </div>
               {u.note && <div className="update-note">{u.note}</div>}
               <div className="chips">
-                <span className="chip"><HardHat size={12} /> {u.builders} builders</span>
-                <span className="chip"><Users size={12} /> {u.helpers} helpers</span>
+                {u.crew?.length ? (
+                  u.crew.map((c, i) => (
+                    <span className="chip" key={i}>
+                      {c.type === 'helper' ? <Users size={12} /> : <HardHat size={12} />} {c.count} {c.type}{c.count === 1 ? '' : 's'}
+                    </span>
+                  ))
+                ) : (
+                  <>
+                    <span className="chip"><HardHat size={12} /> {u.builders} builders</span>
+                    <span className="chip"><Users size={12} /> {u.helpers} helpers</span>
+                  </>
+                )}
                 {u.geotag && <span className="chip"><MapPin size={12} /> {u.geotag}</span>}
                 <span className="chip"><Clock size={12} /> Auto-timestamped</span>
               </div>
@@ -215,19 +256,44 @@ export default function Updates() {
                 {(selectedProject?.phases ?? []).map((ph) => <option key={ph.id} value={ph.id}>{ph.name}</option>)}
               </select>
             </Field>
-            {attCounts && (
-              <div className="att-prefill">
-                {t('upd.fromAtt')}: <b>{attCounts.builders} · {attCounts.helpers}</b>
-                <button type="button" className="btn sm"
-                  onClick={() => setAll((s) => ({ ...s, builders: String(attCounts.builders), helpers: String(attCounts.helpers) }))}>
-                  {t('upd.useCounts')}
-                </button>
+            <Field label="Workers on site">
+              {attCounts ? (
+                <div className="att-prefill" style={{ display: 'block' }}>
+                  <b>{attCounts.workers.length} attended today</b>
+                  <div className="small muted" style={{ marginTop: 4 }}>
+                    {attCounts.workers.map((w, i) => (
+                      <span key={i}>{i > 0 && ' · '}{w.name} ({w.type}{w.phase ? ` – ${w.phase}` : ''})</span>
+                    ))}
+                  </div>
+                </div>
+              ) : (
+                <div className="small muted" style={{ marginBottom: 6 }}>
+                  {v.projectId ? 'No attendance recorded today - add the crew below.' : 'Pick a project first.'}
+                </div>
+              )}
+              {crew.map((c, idx) => (
+                <div className="cost-line" key={c.type}>
+                  <span>
+                    <HardHat size={12} /> {c.count} × {c.type}
+                    {c.auto && <span className="badge blue" style={{ marginLeft: 6 }}>from attendance</span>}
+                  </span>
+                  <X size={13} style={{ cursor: 'pointer' }} title="Remove"
+                    onClick={() => setCrew((l) => l.filter((_, j) => j !== idx))} />
+                </div>
+              ))}
+              {/* Many worker types work the site the same day - add each one. */}
+              <div className="item-add" style={{ marginTop: crew.length ? 8 : 0 }}>
+                <select value={crewDraft.type} onChange={(e) => setCrewDraft((d) => ({ ...d, type: e.target.value }))}>
+                  <option value="">- Worker type -</option>
+                  {workerTypes.filter((wt) => !crew.some((c) => c.type === wt)).map((wt) => (
+                    <option key={wt} value={wt}>{wt}</option>
+                  ))}
+                </select>
+                <input type="number" min="1" placeholder="How many" value={crewDraft.count}
+                  onChange={(e) => setCrewDraft((d) => ({ ...d, count: e.target.value }))} style={{ width: 100 }} />
+                <button type="button" className="btn ghost sm" onClick={addCrew}>Add</button>
               </div>
-            )}
-            <div className="grid grid-2" style={{ gap: 0, columnGap: 12 }}>
-              <Field label={t('upd.builders')}><input type="number" min="0" value={v.builders} onChange={set('builders')} /></Field>
-              <Field label={t('upd.helpers')}><input type="number" min="0" value={v.helpers} onChange={set('helpers')} /></Field>
-            </div>
+            </Field>
             <Field label="Notes"><textarea rows="3" value={v.note} onChange={set('note')} placeholder="What happened on site today?" /></Field>
             <Field label="Items used today (deducted from stock)">
               <div className="item-add">

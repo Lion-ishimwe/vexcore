@@ -382,6 +382,48 @@ export default function Reports() {
               </tbody>
             </table>
           </div>
+
+          {/* Per-store view: each store shows how IT was used; the project
+              figures above already combine all of its stores. */}
+          {(d.materials.stores ?? []).length > 0 && (
+            <div className="card table-card mt">
+              <div className="flex-between" style={{ padding: '14px 16px 0' }}>
+                <h3 style={{ margin: 0 }}><Package size={13} /> By store</h3>
+                <button className="btn ghost sm no-print" onClick={() => csvDownload(
+                  `stores-${d.from}-to-${d.to}.csv`,
+                  ['Store', 'Project', 'Manager', 'Items', 'Stock value', 'Issued', 'Via daily reports', 'Drawn via phases', 'Used total', 'Low stock'],
+                  d.materials.stores.map((s) => [s.name, s.project, s.manager ?? '', s.items, s.stockValue, s.used.issued, s.used.reported, s.used.drawn, s.used.total, s.lowStock.join('; ')]),
+                )}><Download size={12} /> CSV</button>
+              </div>
+              <table>
+                <thead>
+                  <tr><th>Store</th><th>Project</th><th>Manager</th><th>Items</th><th>Stock value</th><th>Used in range</th><th>Shortage</th></tr>
+                </thead>
+                <tbody>
+                  {d.materials.stores.map((s) => (
+                    <tr key={s.id}>
+                      <td><b>{s.name}</b></td>
+                      <td className="muted">{s.project}</td>
+                      <td className="muted">{s.manager ?? '-'}</td>
+                      <td>{s.items}</td>
+                      <td>{fmtMoney(s.stockValue, cur)}</td>
+                      <td>
+                        {fmtMoney(s.used.total, cur)}
+                        <div className="small muted">
+                          issued {fmtMoney(s.used.issued, cur)} · reports {fmtMoney(s.used.reported, cur)} · phases {fmtMoney(s.used.drawn, cur)}
+                        </div>
+                      </td>
+                      <td>
+                        {s.lowStock.length
+                          ? <span className="badge red" title={s.lowStock.join(', ')}>{s.lowStock.length} low</span>
+                          : <span className="badge green">OK</span>}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
         </>
       )}
 

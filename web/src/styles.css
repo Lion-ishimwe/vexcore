@@ -1610,3 +1610,26 @@ a.plain { color: var(--blue); text-decoration: none; }
   .gantt-bar, .gantt-month, .gantt-today, .gantt-line { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
 }
 .wb-logo { width: 16px; height: 16px; border-radius: 4px; object-fit: cover; vertical-align: -3px; margin-right: 5px; }
+
+/* ---- Settings › Access Control: User Access module cards ---- */
+.ua-grid {
+  display: grid; grid-template-columns: repeat(auto-fill, minmax(330px, 1fr));
+  gap: 16px; margin-top: 12px; align-items: start;
+}
+.ua-card {
+  background: #fff; border: 1px solid var(--border); border-radius: 12px;
+  padding: 14px 18px 8px;
+}
+.ua-head {
+  display: flex; align-items: center; justify-content: space-between;
+  cursor: pointer; padding-bottom: 6px; font-size: 14.5px;
+}
+.ua-chev {
+  width: 24px; height: 24px; border-radius: 50%; border: 1.5px solid var(--border);
+  display: inline-flex; align-items: center; justify-content: center; color: #64748b;
+}
+.ua-row {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 11px 2px 11px 14px; font-size: 13.5px; color: #334155;
+}
+.ua-row + .ua-row { border-top: 1px dashed #f1f5f9; }

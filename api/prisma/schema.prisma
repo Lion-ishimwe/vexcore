@@ -37,6 +37,7 @@ model Client {
   payments  Payment[]
   stockIssues StockIssue[]
   stockStores StockStore[]
+  stockTransfers StockTransfer[]
 }
 
 // Manual MoMo subscription payments: the client creates a payment intent at
@@ -93,6 +94,8 @@ model User {
   stockReceived StockIssue[] @relation("stockReceiver")
   cardIssues    CardIssue[]
   attendance    AttendanceRecord[]
+  managedStores StockStore[] @relation("StoreManager")
+  stockTransfers StockTransfer[]
 
   @@index([clientId])
 }
@@ -201,6 +204,10 @@ model PhaseMaterial {
   @@index([phaseId])
 }
 
+// crew: [{ type, count }] - worker types on site that day, pulled from the
+// attendance feature automatically (plus manual additions). builders/helpers
+// stay as legacy rollups (helper types → helpers, everything else → builders)
+// so the cost model keeps working unchanged.
 model DailyUpdate {
   id        Int      @id @default(autoincrement())
   clientId  Int
@@ -213,6 +220,7 @@ model DailyUpdate {
   user      User     @relation(fields: [userId], references: [id])
   builders  Int      @default(0)
   helpers   Int      @default(0)
+  crew      Json?    // [{ type, count }] per worker type on site
   note      String?  @db.Text
   geotag    String?
   forwarded Boolean  @default(false)
@@ -252,7 +260,8 @@ model Media {
 }
 
 // A big project can run several stores (e.g. "Block A store", "Main yard") -
-// each store belongs to one project and holds its own stock items.
+// each store belongs to one project, holds its own stock items and has its
+// own Stock Manager responsible for it.
 model StockStore {
   id        Int      @id @default(autoincrement())
   clientId  Int
@@ -260,11 +269,39 @@ model StockStore {
   projectId Int
   project   Project  @relation(fields: [projectId], references: [id])
   name      String
+  managerId Int?     // the store's Stock Manager
+  manager   User?    @relation("StoreManager", fields: [managerId], references: [id])
   createdAt DateTime @default(now())
 
-  items     StockItem[]
+  items        StockItem[]
+  transfersOut StockTransfer[] @relation("TransferFrom")
+  transfersIn  StockTransfer[] @relation("TransferTo")
 
   @@unique([projectId, name])
+  @@index([clientId])
+}
+
+// Inter-store requests: a Stock Manager who runs short asks another store
+// that HAS the item. On approval the quantity moves between the stores.
+model StockTransfer {
+  id            Int        @id @default(autoincrement())
+  clientId      Int
+  client        Client     @relation(fields: [clientId], references: [id])
+  itemId        Int
+  item          StockItem  @relation(fields: [itemId], references: [id])
+  fromStoreId   Int
+  fromStore     StockStore @relation("TransferFrom", fields: [fromStoreId], references: [id])
+  toStoreId     Int
+  toStore       StockStore @relation("TransferTo", fields: [toStoreId], references: [id])
+  qty           Int
+  note          String?
+  status        String     @default("PENDING") // PENDING | APPROVED | REJECTED
+  requestedById Int
+  requestedBy   User       @relation(fields: [requestedById], references: [id])
+  decidedBy     String?
+  decidedAt     DateTime?
+  createdAt     DateTime   @default(now())
+
   @@index([clientId])
 }
 
@@ -288,6 +325,7 @@ model StockItem {
   materials    PhaseMaterial[]
   usedInUpdates UpdateMaterial[]
   issueItems   StockIssueItem[]
+  transfers    StockTransfer[]
 
   @@index([clientId])
   @@index([projectId])

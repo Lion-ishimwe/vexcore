@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { Pencil, X } from 'lucide-react'
+import { Pencil, X, ChevronRight, ChevronDown } from 'lucide-react'
 import { api } from '../api.js'
 import { useAuth } from '../auth.jsx'
 import { ErrorNote, Field } from '../ui.jsx'
@@ -10,37 +10,78 @@ const TABS = [
   ['profile', 'Company Profile'],
   ['account', 'My Account'],
   ['access', 'Access Control'],
-  ['guest', 'Guest Access'],
   ['attendance', 'Attendance'],
   ['security', 'Security'],
 ]
 
-const ACCESS_TOGGLES = [
-  { key: 'stockVisibleToSite', label: 'Stock visibility for Site Engineers', sub: 'Site Engineers can view stock status (quantities only)' },
-  { key: 'mediaDownload', label: 'Media downloads', sub: 'Allow downloading progress photos and videos (in-app viewing is always on)' },
-  { key: 'stockMgrEdit', label: 'Stock Manager can edit/delete products', sub: 'Otherwise additions are submitted for Senior Engineer approval' },
-  { key: 'seniorTeamManage', label: 'Senior Engineers manage team accounts', sub: 'Allow Senior Engineers to suspend, activate or delete Site Engineer and Stock Manager accounts' },
-  { key: 'attSenior', label: 'Attendance for Senior Engineers', sub: 'Senior Engineers can open the Attendance page, run sessions and record workers' },
-  { key: 'attSite', label: 'Attendance for Site Engineers', sub: 'Site Engineers can open the Attendance page and record workers' },
-  { key: 'attStock', label: 'Attendance for Stock Managers', sub: 'Full attendance access: open and close sessions, record and scan cards, enrol workers and generate cards' },
-  { key: 'projStock', label: 'Projects for Stock Managers', sub: 'Stock Managers can view their assigned projects and phase boards (view-only)' },
+// ---- Access control, organised by Access Level → Module → permissions ----
+// Every toggle still writes the same settings key - only the presentation is
+// grouped so the admin picks a level and a module and sees just what applies.
+const ACCESS_LEVELS = [
+  { name: 'Admin', fixed: 'Full access to everything - the account owner role, not configurable' },
+  { name: 'Senior Engineer', sub: 'Runs projects and the site team; approves stock and daily reports' },
+  { name: 'Site Engineer', sub: 'Submits daily reports and records attendance on site' },
+  { name: 'Stock Manager', sub: 'Runs the store(s) assigned to them - issuing, requests and transfers' },
+  { name: 'Guest', sub: 'View-only visitor - never sees monetary amounts' },
+  { name: 'All members', sub: 'Company-wide permissions that apply to every role' },
 ]
+
+const PERMISSIONS = {
+  'Senior Engineer': {
+    Attendance: [
+      { key: 'attSenior', label: 'Run sessions & record workers', sub: 'Open the Attendance page, run sessions and record workers' },
+    ],
+    Team: [
+      { key: 'seniorTeamManage', label: 'Suspend / activate / delete members', sub: 'Applies to Site Engineer and Stock Manager accounts' },
+    ],
+  },
+  'Site Engineer': {
+    Attendance: [
+      { key: 'attSite', label: 'Record attendance', sub: 'Open the Attendance page and record workers' },
+    ],
+    Stock: [
+      { key: 'stockVisibleToSite', label: 'View stock levels', sub: 'Quantities only, never amounts' },
+    ],
+  },
+  'Stock Manager': {
+    Attendance: [
+      { key: 'attStock', label: 'Full attendance access', sub: 'Open and close sessions, record and scan cards, enrol workers and generate cards' },
+    ],
+    Projects: [
+      { key: 'projStock', label: 'View assigned projects', sub: 'Their projects and phase boards, view-only' },
+    ],
+    Stock: [
+      { key: 'stockMgrEdit', label: 'Edit / delete products', sub: 'Otherwise additions are submitted for Senior Engineer approval' },
+    ],
+  },
+  'Guest': {
+    'Phases & tasks': [
+      { key: 'guestPhases', label: 'View phase board & reports', sub: 'Open the phase board and phase completion reports' },
+    ],
+    'Schedule': [
+      { key: 'guestSchedule', label: 'View & download schedule', sub: 'The Gantt schedule and the exported plan' },
+    ],
+    'Daily updates': [
+      { key: 'guestUpdates', label: 'View forwarded reports', sub: 'Daily reports forwarded to the account' },
+    ],
+    'Stock': [
+      { key: 'guestStock', label: 'View stock levels', sub: 'Quantities only, never amounts' },
+    ],
+  },
+  'All members': {
+    Media: [
+      { key: 'mediaDownload', label: 'Download photos & videos', sub: 'In-app viewing is always on' },
+    ],
+  },
+}
 
 // Email notifications the company's users receive - each one can be switched
 // off individually by the admin. (Password-reset emails always work - they're
 // part of logging in, not a notification.)
 const NOTIF_TOGGLES = [
   { key: 'emailPhaseDone', label: 'Phase completed', sub: 'Email the admins when a phase is signed off, with a link to its completion report' },
-  { key: 'emailDailyReport', label: 'Daily report submitted', sub: 'Email the Senior Engineers and admins when a daily site report lands' },
+  { key: 'emailDailyReport', label: 'Daily report submitted', sub: 'Email the Senior Engineers when a report lands; the admin is emailed only when it is forwarded to them' },
   { key: 'emailLowStock', label: 'Low stock alert', sub: 'Email admins, Senior Engineers and Stock Managers when an item crosses its low-stock threshold' },
-]
-
-// Guest areas are view-only and enabled individually (money is never shown).
-const GUEST_TOGGLES = [
-  { key: 'guestPhases', label: 'Phases & tasks', sub: 'Guests can open the phase board and phase reports' },
-  { key: 'guestSchedule', label: 'Schedule', sub: 'Guests can view the Gantt schedule and download the plan' },
-  { key: 'guestUpdates', label: 'Daily updates', sub: 'Guests see the daily reports forwarded to the account' },
-  { key: 'guestStock', label: 'Stock', sub: 'Guests can view stock levels - quantities only, never amounts' },
 ]
 
 export default function Settings() {
@@ -58,6 +99,11 @@ export default function Settings() {
   const [saved, setSaved] = useState(false)
   const [newType, setNewType] = useState('')
   const workerTypes = settings.workerTypes ?? ['builder', 'helper']
+  // Access control pickers (reference layout: Access Level → Module → toggles)
+  const [levelsOpen, setLevelsOpen] = useState(false)
+  const [accLevel, setAccLevel] = useState('')
+  const [accModule, setAccModule] = useState('')
+  const [uaCollapsed, setUaCollapsed] = useState({}) // module-card collapse state
 
   const addWorkerType = async () => {
     const t = newType.trim().toLowerCase()
@@ -256,13 +302,84 @@ export default function Settings() {
       {/* ---------------- ACCESS CONTROL ---------------- */}
       {tab === 'access' && (
         <>
+          {/* Access levels - collapsible overview of the roles */}
           <div className="card">
-            <h3>Access control</h3>
-            <p className="small muted" style={{ margin: '6px 0 4px' }}>
-              Role permissions - changes apply immediately to all users in your account.
-            </p>
-            {ACCESS_TOGGLES.map((t) => <Toggle t={t} key={t.key} />)}
+            <button onClick={() => setLevelsOpen((o) => !o)}
+              style={{ display: 'flex', alignItems: 'center', gap: 10, width: '100%', background: 'none', border: 'none', cursor: 'pointer', padding: 0, fontFamily: 'inherit', textAlign: 'left' }}>
+              <span style={{ width: 26, height: 26, borderRadius: '50%', border: '1.5px solid var(--border)', display: 'inline-flex', alignItems: 'center', justifyContent: 'center' }}>
+                {levelsOpen ? <ChevronDown size={15} /> : <ChevronRight size={15} />}
+              </span>
+              <h3 style={{ margin: 0, fontSize: 15.5 }}>Access Levels</h3>
+            </button>
+            {levelsOpen && (
+              <div style={{ marginTop: 14 }}>
+                {ACCESS_LEVELS.map((l) => (
+                  <div className="toggle-row" key={l.name} style={{ cursor: l.fixed ? 'default' : 'pointer' }}
+                    onClick={() => { if (!l.fixed) { setAccLevel(l.name); setAccModule('') } }}>
+                    <div>
+                      <div className="t-label">{l.name}</div>
+                      <div className="t-sub">{l.fixed ?? l.sub}</div>
+                    </div>
+                    {!l.fixed && <span className="badge gray">configure ›</span>}
+                  </div>
+                ))}
+              </div>
+            )}
           </div>
+
+          {/* Permissions - pick a level and a module, see exactly what applies */}
+          <div className="card mt">
+            <h3>Permissions</h3>
+            <p className="small muted" style={{ margin: '6px 0 14px' }}>
+              Pick an access level and a module - changes apply immediately to all users in your account.
+            </p>
+            <div className="grid grid-2" style={{ gap: 14 }}>
+              <Field label="Access Level *">
+                <select value={accLevel} onChange={(e) => { setAccLevel(e.target.value); setAccModule('') }}>
+                  <option value="">- Select level -</option>
+                  {Object.keys(PERMISSIONS).map((l) => <option key={l} value={l}>{l}</option>)}
+                </select>
+              </Field>
+              <Field label="Module *">
+                <select value={accModule} onChange={(e) => setAccModule(e.target.value)} disabled={!accLevel}>
+                  <option value="">{accLevel ? 'All modules' : '- Pick a level first -'}</option>
+                  {accLevel && Object.keys(PERMISSIONS[accLevel]).map((m) => <option key={m} value={m}>{m}</option>)}
+                </select>
+              </Field>
+            </div>
+          </div>
+
+          {/* User Access - one collapsible card per module, toggles inside */}
+          {accLevel && (
+            <>
+              <div className="flex-between" style={{ margin: '20px 2px 0' }}>
+                <h3 style={{ margin: 0, fontSize: 16.5 }}>User Access</h3>
+                <span className="small muted">{accLevel}</span>
+              </div>
+              <div className="ua-grid">
+                {Object.entries(PERMISSIONS[accLevel])
+                  .filter(([m]) => !accModule || m === accModule)
+                  .map(([m, toggles]) => {
+                    const closed = !!uaCollapsed[m]
+                    return (
+                      <div className="ua-card" key={m}>
+                        <div className="ua-head" onClick={() => setUaCollapsed((s) => ({ ...s, [m]: !closed }))}>
+                          <b>{m}</b>
+                          <span className="ua-chev">{closed ? <ChevronDown size={14} /> : <ChevronRight size={14} style={{ transform: 'rotate(90deg)' }} />}</span>
+                        </div>
+                        {!closed && toggles.map((t) => (
+                          <div className="ua-row" key={t.key} title={t.sub}>
+                            <span>{t.label}</span>
+                            <div className={`switch ${settings[t.key] ? 'on' : ''}`}
+                              onClick={() => save({ [t.key]: !settings[t.key] })} />
+                          </div>
+                        ))}
+                      </div>
+                    )
+                  })}
+              </div>
+            </>
+          )}
 
           <div className="card mt">
             <h3>Email notifications</h3>
@@ -299,17 +416,6 @@ export default function Settings() {
             </div>
           </div>
         </>
-      )}
-
-      {/* ---------------- GUEST ACCESS ---------------- */}
-      {tab === 'guest' && (
-        <div className="card">
-          <h3>Guest access</h3>
-          <p className="small muted" style={{ margin: '6px 0 4px' }}>
-            What view-only guests can open - each area is enabled individually. Changes apply at the guest's next page load.
-          </p>
-          {GUEST_TOGGLES.map((t) => <Toggle t={t} key={t.key} />)}
-        </div>
       )}
 
       {/* ---------------- ATTENDANCE ---------------- */}

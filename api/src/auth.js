@@ -57,8 +57,10 @@ const ROLE_CAPS = {
     'docs.view', 'docs.upload', 'attendance.view', 'attendance.record', 'attendance.session', 'workers.manage'],
   SITE: ['dashboard', 'projects.view', 'phases.view', 'schedule.view', 'updates.view', 'updates.submit', 'chat',
     'docs.view', 'docs.upload', 'attendance.view', 'attendance.record', 'workers.manage'],
+  // Stock Managers submit daily reports by default (received by the Senior
+  // Engineers and the Admin through the usual submit → forward chain).
   STOCK: ['dashboard', 'stock.view', 'stock.request', 'stock.issue', 'chat', 'docs.view', 'docs.upload',
-    'attendance.view', 'attendance.record'],
+    'attendance.view', 'attendance.record', 'updates.view', 'updates.submit'],
   GUEST: ['dashboard', 'projects.view', 'phases.view', 'schedule.view', 'updates.view', 'docs.view'],
 }
 // The account admin (CLIENT role) can do everything the roles below them can.

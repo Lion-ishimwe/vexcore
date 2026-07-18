@@ -87,7 +87,7 @@ r.patch('/:id', requireCap('team.manage'), async (req, res) => {
 r.delete('/:id', requireCap('team.manage'), async (req, res) => {
   const target = await manageTarget(req, res)
   if (!target) return
-  const [updates, messages, issued, received, attendance, documents, phases] = await Promise.all([
+  const [updates, messages, issued, received, attendance, documents, phases, transfers] = await Promise.all([
     db.dailyUpdate.count({ where: { userId: target.id } }),
     db.message.count({ where: { OR: [{ userId: target.id }, { recipientId: target.id }] } }),
     db.stockIssue.count({ where: { issuedById: target.id } }),
@@ -95,8 +95,9 @@ r.delete('/:id', requireCap('team.manage'), async (req, res) => {
     db.attendanceRecord.count({ where: { userId: target.id } }),
     db.document.count({ where: { uploaderId: target.id } }),
     db.phase.count({ where: { assigneeId: target.id } }),
+    db.stockTransfer.count({ where: { requestedById: target.id } }),
   ])
-  const activity = updates + messages + issued + received + attendance + documents + phases
+  const activity = updates + messages + issued + received + attendance + documents + phases + transfers
   if (activity > 0)
     return res.status(400).json({
       error: `${target.name} has recorded activity (reports, messages, attendance…) - suspend the account instead so the history keeps its author`,
@@ -106,6 +107,7 @@ r.delete('/:id', requireCap('team.manage'), async (req, res) => {
     db.resetToken.deleteMany({ where: { userId: target.id } }),
     db.stockRequest.deleteMany({ where: { requestedById: target.id } }),
     db.cardIssue.deleteMany({ where: { userId: target.id } }),
+    db.stockStore.updateMany({ where: { managerId: target.id }, data: { managerId: null } }),
     db.user.delete({ where: { id: target.id } }),
   ])
   await audit(req.client.id, req.user.name, 'team.deleted', `${target.name} (${target.email})`)
