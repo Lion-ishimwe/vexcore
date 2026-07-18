@@ -13,7 +13,7 @@ export const PLANS = {
 // Where subscribers send the money (manual MoMo flow until a payment API is wired in).
 export const MOMO = {
   number: process.env.MOMO_NUMBER || '0788 123 456',
-  name: process.env.MOMO_NAME || 'Bridge Construction Ltd',
+  name: process.env.MOMO_NAME || 'CMS Construction Management',
 }
 
 // Paid subscriptions get a short grace window: when coverage ends, the client

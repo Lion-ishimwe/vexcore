@@ -1,4 +1,4 @@
-# Bridge Construction - full deployment: MySQL + the app (API + web UI).
+﻿# CMS (Construction Management System) - full deployment: MySQL + the app (API + web UI).
 # Configure via a .env file next to this compose file (see .env.example).
 #   docker compose up -d --build
 # The app comes up on http://<host>:${APP_PORT:-4311}

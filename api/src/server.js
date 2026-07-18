@@ -68,4 +68,4 @@ app.use((err, _req, res, _next) => {
 })
 
 const PORT = process.env.PORT || 4311
-app.listen(PORT, () => console.log(`Bridge API on :${PORT}`))
+app.listen(PORT, () => console.log(`CMS API on :${PORT}`))

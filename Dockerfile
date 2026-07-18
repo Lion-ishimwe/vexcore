@@ -1,4 +1,4 @@
-# Bridge Construction - single app image.
+# CMS (Construction Management System) - single app image.
 # Stage 1 builds the React web app; stage 2 runs the API, which also serves
 # the built web app (api/src/server.js picks up ../web/dist automatically).
 

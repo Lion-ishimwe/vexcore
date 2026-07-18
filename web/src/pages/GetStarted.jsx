@@ -16,10 +16,10 @@ export function PubNav() {
   return (
     <nav className="mk-nav">
       <Link to="/" className="mk-brand">
-        <img className="logo-mark" src="/logo.png" alt="Bridge logo" />
+        <img className="logo-mark" src="/logo.png" alt="CMS logo" />
         <div>
-          <div className="logo-name" style={{ color: 'var(--text)' }}>Bridge</div>
-          <div className="logo-sub">Construction</div>
+          <div className="logo-name" style={{ color: 'var(--text)' }}>CMS</div>
+          <div className="logo-sub">Construction Management System</div>
         </div>
       </Link>
       <div className="mk-links">
@@ -41,8 +41,8 @@ export function PubFoot() {
       <div className="mk-foot-grid">
         <div>
           <div className="mk-brand" style={{ marginBottom: 12 }}>
-            <img className="logo-mark" src="/logo.png" alt="Bridge logo" />
-            <div className="logo-name" style={{ color: '#fff' }}>Bridge</div>
+            <img className="logo-mark" src="/logo.png" alt="CMS logo" />
+            <div className="logo-name" style={{ color: '#fff' }}>CMS</div>
           </div>
           <p>One place to plan projects, track daily progress, manage stock, and control spending - built for construction teams in East Africa.</p>
         </div>
@@ -67,7 +67,7 @@ export function PubFoot() {
           <span>Reports &amp; audit trail</span>
         </div>
       </div>
-      <div className="mk-foot-base">© 2026 Bridge Construction · All rights reserved</div>
+      <div className="mk-foot-base">© 2026 CMS · Construction Management System · All rights reserved</div>
     </footer>
   )
 }
@@ -77,7 +77,7 @@ function HeroMock() {
     <div className="mock-window" aria-hidden="true">
       <div className="mock-title">
         <span /><span /><span />
-        <b>Bridge - Dashboard</b>
+        <b>CMS - Dashboard</b>
       </div>
       <div className="mock-body">
         <div className="mock-side">
@@ -133,7 +133,7 @@ function FlowSection() {
         <div className="comp-desktop">
           <div className="comp-top">
             <span /><span /><span />
-            <b>Bridge - Dashboard</b>
+            <b>CMS - Dashboard</b>
             <i>EM</i>
           </div>
           <div className="comp-body">

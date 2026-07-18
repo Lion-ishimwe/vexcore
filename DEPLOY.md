@@ -1,6 +1,6 @@
-# Deploying Bridge
+# Deploying CMS (Construction Management System)
 
-Bridge deploys as **one Node process + MySQL**. The API server (`api/`) serves the
+CMS deploys as **one Node process + MySQL**. The API server (`api/`) serves the
 built web app (`web/dist`) itself, so there is no separate frontend host.
 
 ```

@@ -169,7 +169,7 @@ r.post('/forgot', async (req, res) => {
   await db.resetToken.create({
     data: { userId: user.id, token, expiresAt: new Date(Date.now() + 3600 * 1000) },
   })
-  sendMail(user.email, 'Reset your Bridge password', {
+  sendMail(user.email, 'Reset your CMS password', {
     title: 'Reset your password',
     lines: [
       `Hi ${user.name},`,

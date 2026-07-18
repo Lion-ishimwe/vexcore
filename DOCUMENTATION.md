@@ -1,4 +1,4 @@
-# Bridge Construction - System Documentation
+# CMS (Construction Management System) - System Documentation
 
 Multi-tenant SaaS for end-to-end construction project management.
 Built July 2026. Requirements source: `Bridge_Construction_PRD_2.docx` (OneDrive Desktop).
@@ -97,13 +97,26 @@ Manager** - anything those roles can do, the admin can do. One deliberate except
 daily reports still reach the admin through the usual *submit → forward* chain
 (the admin's updates feed is forwarded-only, like guests).
 
-| Toggle (Settings) | Effect |
+Settings › **Access Control** is organised HR-style: a collapsible *Access Levels*
+overview plus a *Permissions* panel - pick an **Access Level** and a **Module** and
+the matching switches appear as collapsible module cards.
+
+| Access Level → Module toggle | Effect |
 |---|---|
-| Stock visibility for Site Engineers | grants `stock.view` to SITE |
-| Media downloads | grants `media.download` to everyone (in-app viewing is always on) |
-| Stock Manager can edit/delete products | grants `stock.edit` to STOCK (default: submit requests for approval - PRD §7.1 recommendation) |
-| Two-factor authentication (2FA) | **enforced**: all users must set up TOTP - see §4.2 |
-| Guest access | view-only guests allowed |
+| Senior Engineer → Attendance (`attSenior`) | run sessions & record workers (on by default) |
+| Senior Engineer → Team (`seniorTeamManage`) | suspend / activate / delete Site & Stock accounts |
+| Site Engineer → Attendance (`attSite`) | record attendance (on by default) |
+| Site Engineer → Stock (`stockVisibleToSite`) | grants `stock.view` (quantities only) |
+| Stock Manager → Attendance (`attStock`) | FULL attendance: sessions, scanning, enrolment, cards (on by default) |
+| Stock Manager → Projects (`projStock`) | view-only `projects.view` + `phases.view` for assigned projects |
+| Stock Manager → Stock (`stockMgrEdit`) | grants `stock.edit` (default: submit requests for approval) |
+| Guest → Phases / Schedule / Daily updates / Stock (`guestPhases` …) | each guest area enabled individually |
+| All members → Media (`mediaDownload`) | grants `media.download` (in-app viewing is always on) |
+| Security tab → Two-factor authentication (2FA) | **enforced**: all users must set up TOTP - see §4.2 |
+
+The same tab also holds **Email notifications** (`emailPhaseDone`,
+`emailDailyReport`, `emailLowStock` - each switchable) and the **Worker types**
+list used by attendance enrolment and the daily-update crew picker.
 
 ### Who can create whom (PRD §3)
 
@@ -111,7 +124,11 @@ daily reports still reach the admin through the usual *submit → forward* chain
 - **Senior Engineer** creates Site Engineers and the Stock Manager.
 - **Super Admin** manages company accounts (activate / suspend / terminate, confirm
   payments) and can open any company's workspace in **support mode** (§4.15).
-- Plan limits also apply: the Starter plan does not include Site/Stock accounts (§4.14).
+- **Member lifecycle**: the Admin (and Senior Engineers when granted) can suspend,
+  activate or delete members. Suspended users are refused at login and their
+  sessions die on the next request. Deletion is refused while the member has
+  recorded activity - suspend instead so history keeps its author.
+- Every plan includes every team role - plans differ only in project count (§4.14).
 
 ### Hard server-side rules (not just hidden UI)
 
@@ -206,11 +223,16 @@ Reports show budget vs actual per phase with variance and an "over budget pace"
 flag when spend outruns progress by more than 5 points.
 
 ### 4.6 Daily updates (PRD §4.8)
-- Site/Senior Engineers submit: project, phase, builder & helper counts, note,
-  photos/videos (up to 12 files, 50 MB each). Auto-timestamped; geotagged via the
-  browser's geolocation when permitted.
+- Site/Senior Engineers **and Stock Managers** submit: project, phase, **crew on
+  site** (pulled automatically from today's attendance - who attended, their
+  worker type and phase - with extra worker-type rows addable from the
+  Settings-defined types), note, **items used** (validated against and deducted
+  from stock), photos/videos (up to 12 files, 50 MB each). Auto-timestamped;
+  geotagged when permitted. Crew is stored per type (`crew` JSON) with legacy
+  builders/helpers rollups for the cost model.
 - Senior Engineer **forwards** an update to the client; Clients/Guests see only
-  forwarded updates.
+  forwarded updates. Emails: submission notifies **Senior Engineers only**; the
+  Admin is emailed when the report is **forwarded** to them.
 - Media plays in-app; photo downloads honor the *Media downloads* toggle.
 
 ### 4.7 Stock & inventory (PRD §4.7)
@@ -223,12 +245,31 @@ flag when spend outruns progress by more than 5 points.
   serial, lowThreshold`), fill one row per product, upload (up to 500 rows, into a
   chosen project or the general store). Bad rows are skipped and reported with line
   numbers and reasons; nothing fails silently.
-- Low-stock alerts via per-item threshold.
+- **Stores - one project can run several** (`StockStore`): the Admin/Senior
+  Engineers create stores per project (Stores button on the Stock page), add
+  products to each, and assign every store **its own Stock Manager**. A
+  store-assigned manager's whole stock view narrows to exactly their store(s) -
+  inventory, issues log, alerts - while their edit rights (via the toggle) keep
+  working inside it. Deleting a store moves its items back to the project's
+  unassigned stock.
+- **Inter-store transfers** (`StockTransfer`): a store that runs short requests an
+  item from another store that has it (minimal picker - name/qty/store, no costs).
+  The **source store's manager** or anyone with `stock.approve` decides; approval
+  moves the stock (full-quantity moves relocate the item, partial moves split it).
+- **Issue items** - proof of consumption: recipient identified by **camera QR scan
+  or typed card id** (workers or team members - one card namespace); quantities
+  deduct and land in the Issued-items log with proof badges.
+- Low-stock alerts via per-item threshold - dashboard, stock page and email all
+  name **which store** is short; a transfer that drains the source below its
+  threshold triggers the alert too.
 - **Requests**: Stock Manager (or engineers) request items; Senior Engineer
   approves/rejects. Statuses: PENDING / APPROVED / REJECTED.
 - **Damaged items** log - hidden from the Stock Manager entirely.
 - Total stock value and all monetary columns hidden from the Stock Manager
   (stripped server-side).
+- The Reports hub (Materials & Stock) breaks holdings and usage down **per store**
+  (manager, value, issued / reported / drawn, shortages) while project totals
+  combine all stores.
 
 ### 4.8 Chat (PRD §4.9)
 - **Conversations**: `Everyone` (company channel) + **direct messages** with any
@@ -261,10 +302,13 @@ flag when spend outruns progress by more than 5 points.
   respecting the folder restriction and per-document visibility.
 
 ### 4.10 Attendance
-- **Workers registry**: builders/helpers enrolled once (name, type, phone, optional
-  daily rate, **project assignment**, **card/badge id** - a USB RFID/NFC reader types
-  the id straight into the field), plus CSV **bulk enrolment**. Printable **badge
-  sheet** with QR codes per worker.
+- **Workers registry**: workers enrolled once (name, **type from the
+  Settings-defined worker types**, phone, optional daily rate, **project
+  assignment**, auto-generated **card/badge id**), plus CSV **bulk enrolment**.
+  Printable **badge sheet** with QR codes per worker - and a **Team member
+  badges** group: every team member gets a card automatically at creation and can
+  clock in/out by card like a worker (no wages, excluded from crew/present-absent
+  totals).
 - **Project filter across Workers / Badges / Cards tabs**: one shared dropdown
   (All projects / Shared / per project) filters the worker list, the printable badge
   sheet (print one project's badges at a time) and the issued-cards log, which also
@@ -272,10 +316,10 @@ flag when spend outruns progress by more than 5 points.
 - **Sessions**: started per project - with an optional *"record per phase?"* choice
   that ties attendance to one phase. One active session per project per day.
   Modes: **clock-in** (default) → **clock-out** (any recorder flips) → **closed**.
-- **Recording**: *auto* via card tap on the fullscreen **kiosk** page
-  (`/kiosk/:sessionId` - USB HID readers and QR scanners work with zero drivers),
-  or *manual* tick by engineers/stock manager. Every record shows its method
-  (auto/manual) and who recorded it.
+- **Recording**: *auto* via **camera QR scan or typed card id** on the fullscreen
+  **kiosk** page (`/kiosk/:sessionId` - no USB reader needed; cards serve both
+  attendance and stock issues), or *manual* tick by engineers/stock manager.
+  Every record shows its method (auto/manual) and who recorded it.
 - **Live / paused sessions**: several sessions may be open per day, but exactly
   ONE is *live* (receiving taps) per project. Opening or activating another
   phase **pauses** the current one - it stays open with its records, and can be
@@ -290,11 +334,15 @@ flag when spend outruns progress by more than 5 points.
   cycle by themselves: auto-open when the clock-in window starts (same scope as
   yesterday) and auto-close after the clock-out window ends, sweeping any
   remaining clock-outs as `system`.
-- **Session control** (start/close): Super Admin, Client, Senior Engineer.
-  Recording: Senior/Site/Stock. Client view is read-only.
-- **Integrations**: today's head-count pre-fills the Daily Update form
-  ("Use these counts" - feeding phase labor cost); date-range **report** per worker
-  × day with hours, method, CSV export and print.
+- **Access is granted per role by the Admin** (Settings › Access Control):
+  `attSenior` / `attSite` / `attStock` toggles (all on by default). For Stock
+  Managers the grant is FULL access - open/close sessions, record and scan,
+  enrol workers and generate cards. Session closing follows the
+  `attendance.session` capability.
+- **Integrations**: today's attendance feeds the Daily Update form automatically
+  (attended workers with type + phase become the crew rows); date-range
+  **report** per worker × day with hours, method, pay, **present/absent summary**
+  (green/red), CSV export and print.
 
 ### 4.11 Photo viewer
 Every photo in the system (update media, insight proofs, chat images) opens in an
@@ -307,27 +355,34 @@ progress/proof photos honor the *Media downloads* toggle.
 - **Audit trail**: append-only log of key actions - stock inserted/edited, requests
   decided, updates submitted/forwarded, phases created/edited/deleted/signed off,
   insights added/done/proofed, settings changed, accounts created/suspended.
+  **Super-Admin-only**: it lives in the platform area (`/admin/audit`,
+  cross-company with a company filter) - company admins do not see it.
 
 ### 4.13 Team page
-Card directory of the company's members (searchable, role + 2FA filters, card/list
-view toggle, CSV export, member count). Each card shows role pill, avatar, email,
-joined date and a 2FA On/Off badge. The ⋯ menu offers **View more** (details modal)
-and **Reset password** (1-hour shareable link - §4.2). "+ Add Team Member" respects
-role rules and plan limits.
+Card directory of the company's members (searchable, role + 2FA filters, card /
+list / **org chart** view toggle, CSV export, member count). Each card shows role
+pill, avatar/photo, email, joined date and a 2FA or **Suspended** badge. The ⋯
+menu offers **View more** (details incl. badge/card id), **Reset password**
+(email invitation or direct set - §4.2), and **Suspend / Activate / Delete**
+(admin, or Senior Engineers when granted; delete refused while the member has
+activity). "+ Add Team Member" respects role rules and auto-generates the
+member's QR badge/card.
 
 ### 4.14 Settings, billing & subscriptions
 - **Settings** (admin-only): permission toggles (see §3), account currency, company
   location (drives the weather widget), TIN, attendance time windows, and the
   account-wide 2FA toggle. Branding is a Phase-4 placeholder.
-- **Plans** (`api/src/plans.js`, server-side source of truth):
-  | Plan | Price (RWF/mo) | Active projects | Team roles |
-  |---|---|---|---|
-  | Starter | 30,000 | 1 | Senior + Guests |
-  | Pro | 80,000 | 5 | full team |
-  | Enterprise | custom (contact) | unlimited | full team |
+- **Plans** (`api/src/plans.js`, server-side source of truth). **Every plan has
+  the full feature set and full team roles - plans differ only in active-project
+  count** (feature gating may return later):
+  | Plan | Price (RWF/mo) | Active projects |
+  |---|---|---|
+  | Starter | 30,000 | 1 |
+  | Pro (Most popular) | 80,000 | 5 |
+  | Enterprise | 100,000 | unlimited |
 
-  Trials get the full product; limits bite once a paid plan is active. Hitting a
-  limit returns a clear "upgrade in Billing" error.
+  Trials get the full product; the project limit bites once a paid plan is
+  active and returns a clear "upgrade in Billing" error.
 - **Billing page** (admin nav): current status (trial ends / paid until), plan cards
   with a 1/3/6/12-month duration picker, payment history. **Manual MoMo checkout**:
   choosing a plan creates a payment intent with a unique reference (`BR-XXXXXX`);
@@ -400,10 +455,18 @@ Base URL `/api`. All routes except `auth/*` and `demo/*` require
 | GET | `/projects/updates` | updates.view | clients/guests: forwarded only |
 | POST | `/projects/updates` | updates.submit | multipart `media`, counts, note, geotag |
 | POST | `/projects/updates/:id/forward` | updates.forward | |
-| GET | `/stock` | stock.view | money stripped without `stock.amounts`; project-scoped |
-| POST | `/stock` | stock.edit | machine ⇒ serial required; optional projectId |
+| GET | `/stock` | stock.view | money stripped without `stock.amounts`; project-scoped; store-scoped for assigned managers |
+| POST | `/stock` | stock.edit | machine ⇒ serial required; optional projectId / storeId (a store pins the project) |
 | POST | `/stock/bulk` | stock.edit | CSV template rows (≤500); returns added + skipped w/ reasons |
-| PATCH | `/stock/:id` | stock.edit | |
+| PATCH | `/stock/:id` | stock.edit | incl. moving between stores |
+| GET/POST | `/stock/stores` | stock.view / stock.edit | stores per project; POST/PATCH/DELETE are admin & Senior only; `managerId` assigns the store's Stock Manager |
+| PATCH/DELETE | `/stock/stores/:id` | stock.edit | rename / set manager; delete moves items to unassigned |
+| GET | `/stock/transferable` | stock.request | other stores' items (minimal: name/qty/store) for transfer requests |
+| GET/POST | `/stock/transfers` | stock.view / stock.request | inter-store transfer requests; destination must be own store for assigned managers |
+| PATCH | `/stock/transfers/:id` | source-store manager or stock.approve | APPROVED moves the stock / REJECTED |
+| GET | `/stock/card/:cardId` | stock.issue | resolve a scanned card → worker or team member |
+| POST | `/stock/issues` | stock.issue | hand items to a card-identified person; deducts stock |
+| GET | `/stock/issues` | stock.view | issued-items log (store-scoped for assigned managers) |
 | GET/POST | `/stock/requests` | stock.view / stock.request | |
 | PATCH | `/stock/requests/:id` | stock.approve | APPROVED / REJECTED |
 | GET/POST | `/stock/damaged` | damaged.view / stock.edit | |
@@ -415,13 +478,13 @@ Base URL `/api`. All routes except `auth/*` and `demo/*` require
 | POST | `/attendance/workers/bulk` | workers.manage | CSV rows; optional projectId for the batch |
 | PATCH | `/attendance/workers/:id` | workers.manage | incl. card assignment, project, deactivate |
 | GET | `/attendance/workers/badges` | attendance.view | QR badge sheet data (+ project per worker) |
-| GET/POST | `/attendance/cards` | attendance.view | issued-cards log / generate a card |
+| GET/POST | `/attendance/cards` | attendance.view | issued-cards log / generate a card (`workerId` or `userId` - team members too) |
 | GET | `/attendance/sessions/active?projectId` | attendance.view | triggers midnight rollover |
 | POST | `/attendance/sessions` | attendance.session | projectId + optional phaseId |
 | PATCH | `/attendance/sessions/:id` | attendance.record | `{action:'mode'}` flip; `{action:'close'}` (managers) |
-| POST | `/attendance/sessions/:id/scan` | attendance.record | card tap → auto record |
+| POST | `/attendance/sessions/:id/scan` | attendance.record | card scan → auto record (workers AND team members) |
 | POST | `/attendance/sessions/:id/tick` | attendance.record | manual toggle, labelled |
-| GET | `/attendance/counts?projectId&phaseId` | attendance.view | today's builders/helpers |
+| GET | `/attendance/counts?projectId&phaseId` | attendance.view | today's crew: builders/helpers + `byType` + attended workers with phase |
 | GET | `/attendance/report?projectId&from&to` | attendance.view | worker × day matrix |
 | GET | `/docs?folder=root\|id` | docs.view | folders + docs of one folder; visibility filtered |
 | POST | `/docs` | docs.upload | multipart `files`, folderId, visibility |
@@ -430,11 +493,15 @@ Base URL `/api`. All routes except `auth/*` and `demo/*` require
 | POST | `/docs/folders` | docs.upload | |
 | PATCH | `/docs/folders/:id` | docs.upload | rename (non-system); `restricted` (client, system only) |
 | DELETE | `/docs/folders/:id` | docs.upload | non-system, empty only |
-| GET | `/team` | team.view | incl. `totpEnabled` per member |
-| POST | `/team` | team.create | role rules per creator + plan limits |
-| POST | `/team/:id/reset-link` | team.create | 1-hour password-reset token for a member |
-| GET | `/audit` | audit.view | last 40 entries |
-| GET/PATCH | `/settings` | - / settings.edit | toggles + currency + location/TIN |
+| GET | `/team` | team.view | incl. `totpEnabled`, `suspended`, `cardId` per member |
+| POST | `/team` | team.create | role rules per creator; auto-generates the member's card id |
+| PATCH | `/team/:id` | team.manage | `{ suspended }` - suspend / activate |
+| DELETE | `/team/:id` | team.manage | refused while the member has recorded activity |
+| POST | `/team/:id/reset-link` | team.create | reset link, optionally emailed (`sendEmail`) |
+| POST | `/team/:id/password` | team.create | set a member's password directly |
+| GET | `/reports?from&to&projectId&phaseId` | reports | reports-hub aggregate (KPIs, phases, labor, materials + per-store breakdown) |
+| GET/PATCH | `/settings` | - / settings.edit | toggles + currency + location/TIN + worker types |
+| POST/DELETE | `/settings/logo` | settings.edit | company branding logo |
 
 ### Account & personal 2FA
 | Method | Path | Notes |
@@ -462,7 +529,8 @@ Base URL `/api`. All routes except `auth/*` and `demo/*` require
 | PATCH | `/admin/clients/:id` | `{ status: TRIAL\|ACTIVE\|SUSPENDED\|TERMINATED }` |
 | GET | `/admin/payments` | MoMo payment queue (all companies) |
 | PATCH | `/admin/payments/:id` | `{ action: confirm\|reject }` - confirm activates the company |
-| GET | `/admin/demos` | demo bookings |
+| GET | `/admin/demos` | demo-booking book (lifecycle: scheduled/done/no-show/canceled, time tracking) |
+| GET | `/admin/audit?clientId&q` | cross-company **audit trail** (Super-Admin-only since audit left company reports) |
 
 Static: uploaded media is served at `/uploads/<filename>`.
 
@@ -473,7 +541,7 @@ Static: uploaded media is served at `/uploads/<filename>`.
 | Model | Purpose / key fields |
 |---|---|
 | `Client` | tenant: company, contact, country, currency, `status`, `trialEndsAt`, **`plan`**, **`paidUntil`**, `settings` (Json toggles) |
-| `User` | `clientId` (null for SUPER), role: SUPER/CLIENT/SENIOR/SITE/STOCK/GUEST, bcrypt hash, **`totpSecret`/`totpEnabled`/`backupCodes`** |
+| `User` | `clientId` (null for SUPER), role: SUPER/CLIENT/SENIOR/SITE/STOCK/GUEST, bcrypt hash, **`totpSecret`/`totpEnabled`/`backupCodes`**, `photo`, **`cardId`** (QR badge, unique), **`suspended`** |
 | `ResetToken` | password-reset tokens, 1 h expiry |
 | `ProjectMember` | project ↔ user assignment (unique pair) - drives project scoping |
 | `Payment` | subscription payment: plan, months, amount, unique `reference` (BR-XXXXXX), payerPhone, status PENDING/CONFIRMED/REJECTED/CANCELED, confirmedBy |
@@ -482,16 +550,20 @@ Static: uploaded media is served at `/uploads/<filename>`.
 | `Phase` | status todo/active/done, percent (derived when insights exist), dates, budget, `costPerBuilder/Helper`, assignee |
 | `KeyInsight` | phase checklist item: title, done, doneAt/doneBy, `media` Json proof |
 | `PhaseMaterial` | stock draw snapshot: qty, `unitCostSnap`, `nameSnap` |
-| `DailyUpdate` | builders, helpers, note, geotag, `forwarded`, → `Media[]` |
+| `DailyUpdate` | builders, helpers, **`crew` Json** (per-worker-type counts from attendance), note, geotag, `forwarded`, → `Media[]`, `UpdateMaterial[]` |
+| `UpdateMaterial` | items a daily report consumed: qty + name/unit/cost snapshots, deducted from stock on submit |
 | `Media` | daily-update file: kind photo/video, path |
-| `StockItem` | category Consumable/Machine, qty, unit, unitCost, serial, `lowThreshold`, **`projectId`** (null = general store) |
+| `StockItem` | category Consumable/Machine, qty, unit, unitCost, serial, `lowThreshold`, **`projectId`** (null = general store), **`storeId`** (which of the project's stores holds it) |
+| `StockStore` | a project's store: name (unique per project), **`managerId`** (its Stock Manager) - one project can run several |
+| `StockTransfer` | inter-store request: item, fromStore → toStore, qty, status PENDING/APPROVED/REJECTED, requestedBy, decidedBy |
+| `StockIssue` / `StockIssueItem` | proof of consumption: card-identified recipient (worker or user), issuer, items with qty + snapshots |
 | `StockRequest` | itemName, qty, status PENDING/APPROVED/REJECTED, requester, **`projectId`** |
 | `DamagedItem` | name, serial, note (invisible to STOCK role), **`projectId`** |
 | `Message` | text, `attachments` Json (files + call invites w/ invited ids), `recipientId` (null = channel) |
-| `Worker` | attendance registry: name, type builder/helper, `cardId` (unique per client), dailyRate, active, **`projectId`** (null = shared) |
-| `CardIssue` | issued-card log: worker, cardId, issuedBy |
+| `Worker` | attendance registry: name, type (from Settings worker types), `cardId` (unique - one namespace with team members), dailyRate, `photo`, active, **`projectId`** (null = shared) |
+| `CardIssue` | issued-card log: worker **or user** (team member), cardId, issuedBy |
 | `AttendanceSession` | per project/day: optional phase, mode in/out/closed, opened/closed by |
-| `AttendanceRecord` | per worker per session: clockIn/OutAt, in/outMethod auto/manual, recorder |
+| `AttendanceRecord` | per worker **or team member** per session: clockIn/OutAt, in/outMethod auto/manual, recorder, **`rateSnap`** (wage snapshot at clock-in; null for team members) |
 | `Folder` | document folder: name, `system` (Design/Project Documents), `restricted` (client-only) |
 | `Document` | name, path, kind, `visibility` public/private, uploader, optional folder |
 | `AuditLog` | append-only: userName, action, detail |

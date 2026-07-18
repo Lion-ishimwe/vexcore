@@ -96,7 +96,7 @@ r.post('/password', async (req, res) => {
 export async function beginTotpSetup(user) {
   const secret = generateSecret()
   await db.user.update({ where: { id: user.id }, data: { totpSecret: secret, totpEnabled: false } })
-  const otpauth = generateURI({ issuer: 'Bridge Construction', label: user.email, secret })
+  const otpauth = generateURI({ issuer: 'CMS', label: user.email, secret })
   const qr = await QRCode.toDataURL(otpauth, { margin: 1, width: 220 })
   return { qr, secret, otpauth }
 }

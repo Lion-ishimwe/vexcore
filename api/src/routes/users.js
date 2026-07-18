@@ -144,11 +144,11 @@ r.post('/:id/reset-link', requireCap('team.create'), async (req, res) => {
   })
   let emailed = false
   if (req.body?.sendEmail && mailConfigured) {
-    sendMail(target.email, 'Reset your Bridge password', {
+    sendMail(target.email, 'Reset your CMS password', {
       title: 'Reset your password',
       lines: [
         `Hi ${target.name},`,
-        `${req.user.name} (${req.client.company}) sent you this link to reset your Bridge password. It works for 1 hour.`,
+        `${req.user.name} (${req.client.company}) sent you this link to reset your CMS password. It works for 1 hour.`,
       ],
       buttonText: 'Choose a new password',
       buttonUrl: `${APP_URL}/#/login?reset=${token}`,

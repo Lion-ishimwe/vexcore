@@ -1,4 +1,4 @@
-# Bridge Construction
+# CMS (Construction Management System)
 
 Multi-tenant SaaS for end-to-end construction project management. Full requirements:
 `Bridge_Construction_PRD_2.docx` (on the Desktop, OneDrive).
@@ -47,7 +47,9 @@ Or with Docker (app + MySQL, one command): `cp .env.example .env`, fill it in, t
   Stock Manager never receives monetary fields.
 - **2FA**: per-user TOTP (QR + one-time backup codes) and **account-wide enforcement** -
   when the Admin turns it on, every user is walked through setup at next login.
-- **Subscriptions & payments**: Starter/Pro/Enterprise plans, manual **MTN MoMo**
+- **Subscriptions & payments**: Starter (30k RWF, 1 project) / Pro (80k, 5 projects) /
+  Enterprise (100k, unlimited projects) - **every plan has the full feature set**;
+  they differ only in active-project count. Manual **MTN MoMo**
   checkout (unique reference → Super Admin confirms → account activates,
   `paidUntil` extends). Expired subscriptions get a **2-day grace window** - the
   workspace stays fully usable under a red renewal warning banner (with a Renew
@@ -77,36 +79,63 @@ Or with Docker (app + MySQL, one command): `cp .env.example .env`, fill it in, t
   Materials drawn from stock (deducts quantities, snapshots unit cost).
   Budget-vs-actual + wages/crew/materials breakdown in Reports; attendance report has a
   per-worker Pay column with total wages (hidden from roles without money rights).
-- Daily reports close the day: the submit form includes **items used** (picked from the
-  project's stock + general store, quantities validated and **deducted from stock** on
-  submit, name/unit/cost snapshotted). Reports show the day's attended workers with
-  their pay and the items/materials used when they reach the Senior Engineer / Admin
-  (amounts hidden from Site/Guest). Items consumed by a phase-scoped report count into
-  that phase's materials cost. The Admin never submits daily updates - reports reach
-  them via the submit → forward chain (enforced server-side).
+- Daily reports close the day: the **crew on site is pulled automatically from
+  attendance** (who attended, their worker type and phase) with extra worker-type
+  rows addable from the Settings-defined types; the form includes **items used**
+  (picked from the project's stock + general store, quantities validated and
+  **deducted from stock** on submit, name/unit/cost snapshotted). Reports show the
+  day's attended workers with their pay and the items/materials used when they
+  reach the Senior Engineer / Admin (amounts hidden from Site/Guest). **Stock
+  Managers submit daily reports by default.** The Admin never submits - reports
+  reach them via the submit → forward chain; the submit email goes to Senior
+  Engineers only and the Admin is emailed when the report is **forwarded** to
+  them.
 - Stock: consumables + machines (serial required), **CSV template + bulk upload**,
   low-stock alerts, request → approve/reject flow, damaged-item log (hidden from
-  Stock Manager). **Issue items** - proof of consumption: the Stock Manager (or
-  Senior/Admin) records handing materials to a person, identified by **scanning
-  their worker card** or picked manually (workers or team members), one or more
-  items per issue with quantities; stock deducts and every hand-out lands in the
-  "Issued items" log with a card-scan/manual proof badge. Audit trail on all key
-  actions.
-- Attendance: worker registry (CSV bulk enrolment, printable QR badges, issued-cards
-  log), card-tap **kiosk**, per-phase sessions with pause/activate, time windows,
+  Stock Manager). **Issue items** - proof of consumption: items are handed to a
+  person identified by **scanning their card's QR with the camera or typing the
+  card id** (workers or team members); stock deducts and every hand-out lands in
+  the "Issued items" log with proof badges. Audit trail on all key actions.
+- **Multi-store stock**: a big project can run **several stores** (admin/Senior
+  create them, add products to each); every store has **its own Stock Manager**
+  who then sees ONLY their store's stock (inventory, issues, alerts) while
+  keeping their edit rights inside it. **Inter-store transfer requests**: a store
+  that runs short asks another store that has the item; the source store's
+  manager (or Senior/Admin) approves and the stock physically moves. Shortage
+  alerts (dashboard, stock page, email) name **which store** is short, and the
+  Reports hub breaks usage down **per store** while project totals combine all
+  stores.
+- Attendance: worker registry (CSV bulk enrolment, admin-defined **worker types**
+  from Settings, printable QR badges, issued-cards log), card-tap **kiosk** with
+  camera QR scanning, per-phase sessions with pause/activate, time windows,
   reports with CSV export, **present/absent summary** (green/red, per day and per
-  range) and a per-worker Pay column.
+  range) and a per-worker Pay column. **Team members carry auto-generated badges
+  too** and can clock in/out by card like workers (no wages, not counted in crew
+  totals). Attendance access is **granted per role by the admin** (Settings ›
+  Access Control) - for Stock Managers the grant is FULL access (sessions,
+  scanning, enrolment, cards).
 - **Photos**: optional profile photo for every user (My Account) and every worker
   (click the avatar in the Workers tab) - shown across the app instead of initials.
-- **Guest access** is granular: Phases, Daily updates and Stock are each enabled
-  individually in Settings (enforced server-side in the capability layer).
+- **Access Control** (Settings › Access Control, HR-style): a collapsible
+  **Access Levels** overview plus a **Permissions** panel - pick an Access Level
+  (Senior/Site/Stock/Guest/All members) and a Module, and the matching switches
+  appear as collapsible module cards. Covers per-role attendance grants, Senior
+  team management, Stock Manager project view, stock visibility/editing, all
+  guest areas (Phases, Schedule, Daily updates, Stock) and media downloads -
+  everything enforced server-side in the capability layer.
+- **Team lifecycle**: members can be **suspended / activated / deleted** by the
+  admin (and by Senior Engineers when granted); suspended users are blocked at
+  login and their sessions die immediately; deletion is refused while the member
+  has recorded activity (suspend instead, history keeps its author).
 - Chat: company channel + **private DMs** with unread dots, **voice notes** (in-browser
   recording), attachments (8 × 50 MB), **video calls** (embedded Jitsi) with member
   invites and ringing banners. Every photo opens in an in-app lightbox with
   permission-gated download.
 - Documents with folders, visibility rules and a dashboard design slider; weather widget.
-- Team page: card directory with search/filters/CSV export and admin-generated
-  **password-reset links**.
+- Team page: card directory with search/filters/CSV export, an **org chart view**
+  (levels by role), suspend/activate/delete actions, and password resets by
+  **email invitation or direct set**. New team members get a QR badge/card
+  automatically at creation.
 - **Branding** (Settings › Branding): per-company logo upload, applied to everything
   printed or exported - schedule PDF/Excel letterheads, worker badges and both faces
   of the ID cards (screen, print and PNG download). Falls back to the platform logo.
@@ -114,8 +143,10 @@ Or with Docker (app + MySQL, one command): `cp .env.example .env`, fill it in, t
   Overview (KPIs, weekly spend chart, budget-vs-actual bars, alerts), Projects & Phases
   (expectation vs reality in money and days, burn-rate forecast at completion, links to
   phase reports), Labor & Attendance (wages, worker-days, presence chart, per-worker
-  table), Materials & Stock (consumption, stock value, damaged, requests), and a
-  searchable Audit trail. CSV export per table + print.
+  table), and Materials & Stock (consumption, stock value, damaged, requests, plus a
+  **per-store breakdown** with manager, value, usage and shortages). CSV export per
+  table + print. The **Audit trail is Super-Admin-only** (cross-company, in the
+  platform area) - company admins no longer see it.
 - **Super Admin**: finance dashboard (monthly received / due / pending, renewal
   reminders with a configurable window), MoMo payment queue plus a dedicated
   **Payments tab** (full history with received/pending/all-time tiles, status

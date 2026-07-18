@@ -7,12 +7,6 @@ import { useT, LanguageDropdown } from '../i18n.jsx'
 import { PubNav, PubFoot } from './GetStarted.jsx'
 import { Field, ErrorNote, useForm } from '../ui.jsx'
 
-const DEMO = [
-  ['chantal@demo.rw', 'Admin'], ['eric@demo.rw', 'Senior Engineer'],
-  ['jp@demo.rw', 'Site Engineer'], ['divine@demo.rw', 'Stock Manager'],
-  ['guest@demo.rw', 'Guest'],
-]
-
 export default function Login() {
   const { login } = useAuth()
   const { t } = useT()
@@ -81,7 +75,7 @@ export default function Login() {
   const copyBackup = () => navigator.clipboard?.writeText(setupBackup.join('\n'))
   const downloadBackup = () => {
     const blob = new Blob([
-      `Bridge Construction - 2FA backup codes for ${v.email}\n` +
+      `CMS (Construction Management System) - 2FA backup codes for ${v.email}\n` +
       `Each code works exactly once. Keep them somewhere safe.\n\n` +
       setupBackup.join('\n') + '\n',
     ], { type: 'text/plain' })
@@ -155,15 +149,6 @@ export default function Login() {
               <div className="flex-between mt small">
                 <a className="plain" href="#" onClick={(e) => { e.preventDefault(); setMode('forgot'); setError(null) }}>{t('login.forgot')}</a>
                 <Link className="plain" to="/signup">{t('login.create')}</Link>
-              </div>
-              <div className="demo-box">
-                <b>Demo accounts</b> (password <code>demo1234</code>) - click to fill:<br />
-                {DEMO.map(([email, label]) => (
-                  <span key={email}>
-                    <code onClick={() => setAll({ email, password: 'demo1234' })}>{email}</code> {label}<br />
-                  </span>
-                ))}
-                <code onClick={() => setAll({ email: 'super@bridge.app', password: 'super1234' })}>super@bridge.app</code> Super Admin
               </div>
             </form>
           )}

@@ -373,7 +373,7 @@ export default function Attendance() {
     titleBlock(0, [
       ['Card No', c.cardId],
       ['Issued', new Date(c.createdAt ?? Date.now()).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' })],
-      ['System', 'BRIDGE'],
+      ['System', 'CMS'],
     ], false)
     ctx.restore()
     ctx.strokeStyle = '#94a3b8'; ctx.lineWidth = 2; rr(1, 1, W - 2, H - 2, R); ctx.stroke()
@@ -401,7 +401,7 @@ export default function Attendance() {
     ctx.fillText(spaced(company.toUpperCase()), W / 2, Y + 238)
     ctx.fillStyle = '#f59e0b'; ctx.fillRect(W / 2 - 38, Y + 268, 76, 4)
     ctx.fillStyle = '#8fa0b8'; ctx.font = F(700, 13)
-    ctx.fillText(spaced('POWERED BY BRIDGE CONSTRUCTION'), W / 2, Y + 302)
+    ctx.fillText(spaced('POWERED BY CMS'), W / 2, Y + 302)
     titleBlock(Y, [
       ['Property of', company],
       ['If found', contact || 'Return to site office'],
@@ -855,7 +855,7 @@ export default function Attendance() {
                         <div className="idc2-block">
                           <div><span>Card No</span><b>{w.cardId}</b></div>
                           <div><span>Issued</span><b>{new Date().toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' })}</b></div>
-                          <div><span>System</span><b>BRIDGE</b></div>
+                          <div><span>System</span><b>CMS</b></div>
                         </div>
                       </div>
                     </div>
@@ -866,7 +866,7 @@ export default function Attendance() {
                           <img className="idc2-logo big" src={badges.logo || '/logo.png'} alt="" />
                           <b>{badges.company?.toUpperCase()}</b>
                           <i className="idcb2-rule" />
-                          <span className="idcb2-sub">POWERED BY BRIDGE CONSTRUCTION</span>
+                          <span className="idcb2-sub">POWERED BY CMS - CONSTRUCTION MANAGEMENT SYSTEM</span>
                         </div>
                         <div className="idc2-block dark">
                           <div><span>Property of</span><b>{badges.company}</b></div>
