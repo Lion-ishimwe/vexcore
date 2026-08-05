@@ -106,14 +106,11 @@ export default function Login() {
     setBusy(true); setError(null)
     try {
       const r = await api('/auth/forgot', { method: 'POST', body: { email: v.email } })
-      if (r.emailed) {
-        setMode('sent') // the reset link went to their inbox
-      } else {
-        // dev mode (no mailer configured): the token comes back directly
-        setResetInfo(r.devToken ?? null)
-        setResetV((s) => ({ ...s, token: r.devToken ?? '' }))
-        setMode('reset')
-      }
+      // The server never hands the token back - doing so let anyone reset any
+      // account. Either it was emailed, or this deployment has no mailer
+      // configured and an administrator has to retrieve the link.
+      setResetInfo({ emailed: !!r.emailed })
+      setMode('sent')
     } catch (err) { setError(err.message) } finally { setBusy(false) }
   }
 
@@ -138,7 +135,7 @@ export default function Login() {
               {mode === 'login' ? t('login.title') :
                mode === 'totp' ? 'Two-step verification' :
                mode === 'forgot' ? 'Forgot password' :
-               mode === 'sent' ? 'Check your email' :
+               mode === 'sent' ? (resetInfo?.emailed ? 'Check your email' : 'Email is not set up on this server') :
                mode === 'setup2fa' ? 'Set up two-factor authentication' :
                'Set a new password'}
             </h2>
@@ -148,7 +145,9 @@ export default function Login() {
             {mode === 'login' ? t('login.sub') :
              mode === 'totp' ? `Enter the code from your authenticator app - or one of your backup codes - to finish logging in as ${v.email}.` :
              mode === 'forgot' ? 'Enter your email and we’ll send a reset link.' :
-             mode === 'sent' ? `If an account exists for ${v.email}, a reset link is on its way - it works for 1 hour. Check the spam folder too.` :
+             mode === 'sent' ? (resetInfo?.emailed
+               ? `If an account exists for ${v.email}, a reset link is on its way - it works for 1 hour. Check the spam folder too.`
+               : 'This server has no email sending configured, so the reset link could not be delivered. Ask your administrator to configure SMTP, or to fetch the link from the server log and send it to you. The link is valid for 1 hour.') :
              mode === 'setup2fa' ? 'Your account requires 2FA for all users - finish this one-time setup to continue.' :
              'Reset link generated - choose a new password.'}
           </p>
@@ -258,7 +257,6 @@ export default function Login() {
 
           {mode === 'reset' && (
             <form onSubmit={doReset}>
-              {resetInfo && <div className="ok-note">Dev mode: reset token issued directly (in production this arrives by email).</div>}
               {/* The token rides along invisibly from the email link (or dev
                   issuance) - the user only ever chooses their new password. */}
               {!reset.token && (
