@@ -17,23 +17,37 @@ Hosting guide: [DEPLOY.md](DEPLOY.md).**
 Requires Node 20+ and local MySQL (`mysql://root@localhost:3306/bridge`, DB auto-created).
 
 ```
-cd api && npm install && npx prisma db push && npm run seed && npm run dev   # API :4311
-cd web && npm install && npm run dev                                          # Web :5330
+cd api && npm install && npm run migrate && npm run dev    # API :4311
+cd web && npm install && npm run dev                        # Web :5330
 ```
 
-Or with Docker (app + MySQL, one command): `cp .env.example .env`, fill it in, then
-`docker compose up -d --build` - details in [DEPLOY.md](DEPLOY.md).
+The API refuses to start without a `JWT_SECRET` of 32+ characters - generate one
+with `node -e "console.log(require('crypto').randomBytes(48).toString('base64url'))"`.
 
-## Demo logins (password `demo1234` unless noted)
+Create the platform Super Admin (password comes from the environment; there is
+no default):
 
-| Email | Role |
-|---|---|
-| chantal@demo.rw | Admin (account owner) |
-| eric@demo.rw | Senior Engineer |
-| jp@demo.rw / aline@demo.rw | Site Engineers |
-| divine@demo.rw | Stock Manager (no monetary amounts, no damaged items) |
-| guest@demo.rw | Guest (view-only) |
-| super@bridge.app / `super1234` | Super Admin (client management) |
+```
+cd api && SUPER_PASSWORD="a-long-random-password" npm run seed
+```
+
+Or with Docker (app + MySQL + nightly backups, one command): `cp .env.example .env`,
+fill it in, then `docker compose up -d --build` - details in [DEPLOY.md](DEPLOY.md).
+
+## Demo dataset (local development only)
+
+`SEED_DEMO=true npm run seed` loads a sample company - projects, phases, stock,
+attendance and a set of demo logins - so the app has something to show while you
+work on it.
+
+**Those demo accounts share one well-known password and must never exist on an
+instance anyone else can reach.** The seed prints the logins when it runs; before
+going live, remove them:
+
+```
+cd api && npm run purge:demo            # suspend the demo logins, keep the data
+cd api && npm run purge:demo -- --wipe  # delete the demo company entirely
+```
 
 ## What's implemented (PRD phases 0–4)
 

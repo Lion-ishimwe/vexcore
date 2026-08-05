@@ -1,22 +1,11 @@
 import { Router } from 'express'
-import multer from 'multer'
-import path from 'node:path'
-import fs from 'node:fs'
 import { db, audit } from '../db.js'
 import { requireCap } from '../auth.js'
+import { uploader, discardUploads, removeStoredFile } from '../uploads.js'
 
 const r = Router()
 
-const UPLOADS = path.resolve('uploads')
-fs.mkdirSync(UPLOADS, { recursive: true })
-const upload = multer({
-  storage: multer.diskStorage({
-    destination: UPLOADS,
-    filename: (_req, file, cb) =>
-      cb(null, Date.now() + '-' + Math.round(Math.random() * 1e6) + path.extname(file.originalname || '.bin')),
-  }),
-  limits: { fileSize: 50 * 1024 * 1024 },
-})
+const upload = uploader({ files: 10 })
 
 // Fixed folders every client account gets. The client controls whether the
 // rest of the team can access them (restricted = client-only).
@@ -91,8 +80,10 @@ r.post('/', requireCap('docs.upload'), upload.array('files', 10), async (req, re
   let folderId = null
   if (req.body.folderId && req.body.folderId !== 'root') {
     const folder = await db.folder.findFirst({ where: { id: +req.body.folderId, clientId: req.client.id } })
-    if (!folder) return res.status(404).json({ error: 'Folder not found' })
-    if (folderLocked(req, folder)) return res.status(403).json({ error: 'This folder is restricted to the client' })
+    // Files are already on disk by the time these checks run - clean up on the
+    // way out or the uploads directory collects files nothing references.
+    if (!folder) { discardUploads(req); return res.status(404).json({ error: 'Folder not found' }) }
+    if (folderLocked(req, folder)) { discardUploads(req); return res.status(403).json({ error: 'This folder is restricted to the client' }) }
     folderId = folder.id
   }
   const visibility = req.body.visibility === 'private' ? 'private' : 'public'
@@ -137,6 +128,8 @@ r.delete('/:id', requireCap('docs.upload'), async (req, res) => {
   if (doc.uploaderId !== req.user.id && req.user.role !== 'CLIENT')
     return res.status(403).json({ error: 'Only the uploader or the client can delete this document' })
   await db.document.delete({ where: { id: doc.id } })
+  // Deleting only the row used to leave the file itself served forever.
+  removeStoredFile(doc.path)
   await audit(req.client.id, req.user.name, 'docs.deleted', doc.name)
   res.json({ ok: true })
 })

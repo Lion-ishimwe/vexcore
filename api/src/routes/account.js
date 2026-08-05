@@ -1,27 +1,18 @@
 import { Router } from 'express'
 import bcrypt from 'bcryptjs'
 import crypto from 'node:crypto'
-import path from 'node:path'
-import fs from 'node:fs'
-import multer from 'multer'
 import { generateSecret, verifySync, generateURI } from 'otplib'
 import QRCode from 'qrcode'
 import { db, audit } from '../db.js'
-import { settingsOf } from '../auth.js'
+import { settingsOf, sign, setSessionCookie, revocationStamp } from '../auth.js'
+import { uploader, removeStoredFile } from '../uploads.js'
 
 const r = Router()
 
-const UPLOADS = path.resolve('uploads')
-fs.mkdirSync(UPLOADS, { recursive: true })
-export const photoUpload = multer({
-  storage: multer.diskStorage({
-    destination: UPLOADS,
-    filename: (_req, file, cb) =>
-      cb(null, Date.now() + '-' + Math.round(Math.random() * 1e6) + path.extname(file.originalname || '.jpg')),
-  }),
-  limits: { fileSize: 8 * 1024 * 1024 },
-  fileFilter: (_req, file, cb) => cb(null, !!file.mimetype?.startsWith('image')),
-})
+// The old filter trusted the client-declared mimetype while taking the
+// extension from the filename, so "image/png" + "x.html" stored an .html file.
+// The shared uploader derives the extension from an allowlist instead.
+export const photoUpload = uploader({ sizeMb: 8, files: 1 })
 
 const sha256 = (s) => crypto.createHash('sha256').update(s).digest('hex')
 // Backup codes are compared case-insensitively, ignoring dashes/spaces.
@@ -62,13 +53,16 @@ r.patch('/profile', async (req, res) => {
 
 r.post('/photo', photoUpload.single('photo'), async (req, res) => {
   if (!req.file) return res.status(400).json({ error: 'Pick an image file' })
+  const previous = req.user.photo
   await db.user.update({ where: { id: req.user.id }, data: { photo: req.file.filename } })
+  removeStoredFile(previous) // the replaced photo is no longer referenced
   await logFor(req, 'account.photo', `${req.user.name} updated their photo`)
   res.json({ photo: '/uploads/' + req.file.filename })
 })
 
 r.delete('/photo', async (req, res) => {
   await db.user.update({ where: { id: req.user.id }, data: { photo: null } })
+  removeStoredFile(req.user.photo)
   await logFor(req, 'account.photo', `${req.user.name} removed their photo`)
   res.json({ photo: null })
 })
@@ -80,12 +74,19 @@ r.post('/password', async (req, res) => {
   if (!(await bcrypt.compare(current ?? '', req.user.passwordHash)))
     return res.status(401).json({ error: 'Current password is wrong' })
   if (!next || next.length < 8) return res.status(400).json({ error: 'New password must be at least 8 characters' })
-  await db.user.update({
+  const user = await db.user.update({
     where: { id: req.user.id },
-    data: { passwordHash: await bcrypt.hash(next, 10) },
+    // Every session issued before this instant stops working, so changing the
+    // password actually evicts anyone holding a stolen token.
+    data: { passwordHash: await bcrypt.hash(next, 10), sessionsValidFrom: revocationStamp() },
   })
   await logFor(req, 'account.password', `${req.user.name} changed their password`)
-  res.json({ ok: true })
+  // ...including this one, so hand the caller a replacement rather than logging
+  // them out of the tab they just changed their password in.
+  const token = sign(user)
+  setSessionCookie(res, token)
+  res.setHeader('x-refresh-token', token)
+  res.json({ ok: true, token })
 })
 
 // ---- Two-factor authentication (TOTP) ----

@@ -5,7 +5,18 @@ import { settingsOf } from './auth.js'
 // Low-stock email alert: fires only when an item CROSSES its threshold
 // (was above before the operation, at/below after) - so one email per event,
 // not one per draw while it sits low. Goes to everyone stock-responsible.
+// Callers deliberately do not await this (an alert must never delay or fail a
+// stock draw), which means an unhandled rejection in here would take the whole
+// process down. Everything is wrapped.
 export async function checkLowStock(client, item, prevQty) {
+  try {
+    await runLowStockCheck(client, item, prevQty)
+  } catch (e) {
+    console.error('[stock] low-stock alert failed:', e.message)
+  }
+}
+
+async function runLowStockCheck(client, item, prevQty) {
   if (!settingsOf(client).emailLowStock) return
   if (!item.lowThreshold || item.lowThreshold <= 0) return
   if (prevQty <= item.lowThreshold) return // was already low - no repeat spam

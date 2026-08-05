@@ -3,7 +3,8 @@ import express from 'express'
 import cors from 'cors'
 import path from 'node:path'
 import fs from 'node:fs'
-import { authRequired } from './auth.js'
+import { authRequired, requireClient } from './auth.js'
+import { uploadsHandler, discardUploads } from './uploads.js'
 import authRoutes from './routes/auth.js'
 import demoRoutes from './routes/demo.js'
 import accountRoutes from './routes/account.js'
@@ -16,7 +17,21 @@ import billingRoutes from './routes/billing.js'
 import miscRoutes from './routes/misc.js'
 
 const app = express()
-app.use(cors({ exposedHeaders: ['x-refresh-token'] }))
+
+// CORS used to allow every origin. In production the web app is served by this
+// same process, so no cross-origin call is legitimate; in dev the Vite server
+// on :5330 is. CORS_ORIGINS (comma-separated) overrides for split deployments.
+const allowedOrigins = (process.env.CORS_ORIGINS || process.env.APP_URL || '')
+  .split(',').map(s => s.trim().replace(/\/$/, '')).filter(Boolean)
+app.use(cors({
+  origin(origin, cb) {
+    // same-origin / curl / server-to-server requests send no Origin header
+    if (!origin) return cb(null, true)
+    cb(null, allowedOrigins.includes(origin.replace(/\/$/, '')))
+  },
+  credentials: true,
+  exposedHeaders: ['x-refresh-token'],
+}))
 app.use(express.json({ limit: '2mb' }))
 
 // Lightweight performance tracker for the Super Admin system panel: every API
@@ -36,17 +51,26 @@ app.use((req, res, next) => {
   next()
 })
 
-app.use('/uploads', express.static(path.resolve('uploads')))
+// Unauthenticated liveness probe for Docker/compose healthchecks.
+app.get('/healthz', (_req, res) => res.json({ ok: true }))
+
+// Uploads are NOT a static mount: every file is resolved back to the record
+// that owns it and checked against the caller's account (see uploads.js).
+app.use('/uploads', uploadsHandler)
 
 app.use('/api/auth', authRoutes)
 app.use('/api/demo', demoRoutes)
+// /account works without a company (a Super Admin still has a profile).
 app.use('/api/account', authRequired, accountRoutes)
-app.use('/api/team', authRequired, userRoutes)
-app.use('/api/projects', authRequired, projectRoutes)
-app.use('/api/stock', authRequired, stockRoutes)
-app.use('/api/docs', authRequired, docsRoutes)
-app.use('/api/attendance', authRequired, attendanceRoutes)
-app.use('/api/billing', authRequired, billingRoutes)
+// Everything below is workspace data and needs a company in context.
+app.use('/api/team', authRequired, requireClient, userRoutes)
+app.use('/api/projects', authRequired, requireClient, projectRoutes)
+app.use('/api/stock', authRequired, requireClient, stockRoutes)
+app.use('/api/docs', authRequired, requireClient, docsRoutes)
+app.use('/api/attendance', authRequired, requireClient, attendanceRoutes)
+app.use('/api/billing', authRequired, requireClient, billingRoutes)
+// misc carries BOTH workspace routes and the Super Admin platform panel, so the
+// company check is applied inside it (everything except /admin/*).
 app.use('/api', authRequired, miscRoutes)
 
 // Production: serve the built web app (web/dist) from this same server, so one
@@ -62,8 +86,22 @@ if (fs.existsSync(path.join(WEB_DIST, 'index.html'))) {
   console.log('Serving web app from', WEB_DIST)
 }
 
-app.use((err, _req, res, _next) => {
+app.use((err, req, res, next) => {
   console.error(err)
+  // Uploads land on disk before the handler runs; a request that dies here must
+  // not leave them behind.
+  discardUploads(req)
+  // A failure mid-stream (e.g. PDF generation) has already sent headers -
+  // writing a JSON body on top throws a second, more confusing error.
+  if (res.headersSent) return req.socket?.destroy()
+  if (err?.code === 'LIMIT_FILE_SIZE')
+    return res.status(413).json({ error: 'That file is too large' })
+  if (err?.code === 'LIMIT_FILE_COUNT')
+    return res.status(413).json({ error: 'Too many files in one upload' })
+  if (err?.code === 'UNSUPPORTED_FILE_TYPE') return res.status(400).json({ error: err.message })
+  // Handlers throw with an explicit status for expected, user-facing failures
+  // (e.g. stock running out mid-transaction).
+  if (err?.status >= 400 && err.status < 500) return res.status(err.status).json({ error: err.message })
   res.status(500).json({ error: 'Server error' })
 })
 

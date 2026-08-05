@@ -2,10 +2,11 @@ import { Router } from 'express'
 import bcrypt from 'bcryptjs'
 import crypto from 'node:crypto'
 import { db, audit } from '../db.js'
-import { requireCap } from '../auth.js'
+import { requireCap, revocationStamp } from '../auth.js'
 import { planLimits } from '../plans.js'
 import { sendMail, mailConfigured, APP_URL } from '../mail.js'
 import { genCardId } from '../cards.js'
+import { validEmail } from './auth.js'
 
 const r = Router()
 
@@ -22,8 +23,11 @@ r.get('/', requireCap('team.view'), async (req, res) => {
 })
 
 r.post('/', requireCap('team.create'), async (req, res) => {
-  const { name, email, password, role } = req.body
+  const { name, password, role } = req.body
+  const email = String(req.body.email ?? '').trim().toLowerCase()
   if (!name || !email || !password || !role) return res.status(400).json({ error: 'Name, email, password and role are required' })
+  // Addresses reach outbound mail headers, so they are validated on the way in.
+  if (!validEmail(email)) return res.status(400).json({ error: 'Enter a valid email address' })
   if (password.length < 8) return res.status(400).json({ error: 'Password must be at least 8 characters' })
   const allowed = CAN_CREATE[req.user.role] ?? []
   if (!allowed.includes(role))
@@ -165,7 +169,12 @@ r.post('/:id/password', requireCap('team.create'), async (req, res) => {
   if (!target) return
   const password = String(req.body.password ?? '')
   if (password.length < 8) return res.status(400).json({ error: 'Password must be at least 8 characters' })
-  await db.user.update({ where: { id: target.id }, data: { passwordHash: await bcrypt.hash(password, 10) } })
+  await db.user.update({
+    where: { id: target.id },
+    // An admin resetting someone's password must also kick out whoever is
+    // currently using it - that is usually the reason for the reset.
+    data: { passwordHash: await bcrypt.hash(password, 10), sessionsValidFrom: revocationStamp() },
+  })
   await db.resetToken.deleteMany({ where: { userId: target.id } }) // outstanding links die with the old password
   await audit(req.client.id, req.user.name, 'team.password_set', `for ${target.email}`)
   res.json({ ok: true })

@@ -58,9 +58,10 @@ Requires Node 20+ and a local MySQL reachable at `mysql://root@localhost:3306/br
 # API - port 4311
 cd api
 npm install
-npx prisma db push        # creates/updates all tables
-npm run seed              # demo company, users, projects, stock, messages
-npm run dev               # node --watch src/server.js
+npm run migrate                              # applies migrations (baselines an existing DB)
+SUPER_PASSWORD="a-long-random-password" \
+  SEED_DEMO=true npm run seed                # Super Admin + the demo dataset
+npm run dev                                  # node --watch src/server.js
 
 # Web - port 5330 (proxies /api and /uploads to :4311)
 cd web
@@ -70,16 +71,30 @@ npm run dev
 
 Open http://localhost:5330.
 
-### Demo accounts (password `demo1234` unless noted)
+`JWT_SECRET` must be at least 32 characters or the API exits at boot. The Super
+Admin password comes from `SUPER_PASSWORD` and has no default - this account
+owns every tenant, so a documented default would mean anyone who read this file
+could sign in to a fresh deployment.
 
-| Email | Role | Sees |
-|---|---|---|
-| chantal@demo.rw | Admin (account owner) | Everything the roles below can do, plus settings, billing, team; daily updates still arrive forwarded |
-| eric@demo.rw | Senior Engineer | Everything operational: phases, stock (with amounts), approvals, team |
-| jp@demo.rw / aline@demo.rw | Site Engineers | Assigned work, daily updates, stock quantities (if enabled), chat |
-| divine@demo.rw | Stock Manager | Stock **quantities only** - no money, no damaged items; can request |
-| guest@demo.rw | Guest | View-only: dashboard, projects, updates |
-| super@bridge.app (`super1234`) | Super Admin | Platform panel: all client accounts + demo bookings |
+### Demo accounts - local development only
+
+`SEED_DEMO=true` loads a sample company (Amahoro Construction Ltd) with an Admin,
+Senior Engineer, two Site Engineers, a Stock Manager and a Guest, so every role
+can be exercised. The seed prints their addresses and the single shared password
+when it runs.
+
+| Role in the demo set | Sees |
+|---|---|
+| Admin (account owner) | Everything the roles below can do, plus settings, billing, team; daily updates still arrive forwarded |
+| Senior Engineer | Everything operational: phases, stock (with amounts), approvals, team |
+| Site Engineers | Assigned work, daily updates, stock quantities (if enabled), chat |
+| Stock Manager | Stock **quantities only** - no money, no damaged items; can request |
+| Guest | View-only: dashboard, projects, updates |
+
+> **These accounts share one password and must not exist anywhere reachable.**
+> Before an instance is exposed, run `npm run purge:demo` (suspends the demo
+> logins, keeps their history) or `npm run purge:demo -- --wipe` (deletes the
+> demo company outright). Both keep the Super Admin.
 
 ---
 
@@ -259,6 +274,18 @@ flag when spend outruns progress by more than 5 points.
 - **Issue items** - proof of consumption: recipient identified by **camera QR scan
   or typed card id** (workers or team members - one card namespace); quantities
   deduct and land in the Issued-items log with proof badges.
+- **Record return** - the other half of an issue (`StockReturn`): a worker takes
+  100 bags to site in the morning and hands the unused ones back in the
+  afternoon. Scanning their card lists exactly what they are **still holding**
+  (`qty - returnedQty` per issue line, across every open hand-out); the
+  storekeeper enters how much is coming back, split into **good** and
+  **damaged**. Good quantities go straight back into the store's stock;
+  damaged ones do **not** - they are written to the Damaged-items log instead,
+  so stock never counts a broken item as usable. Partial returns are the norm:
+  anything not handed back stays outstanding against that person, and the
+  Issued-items log shows a running "still out" figure per hand-out. Returning
+  more than is outstanding is refused, as is returning items that were issued
+  to somebody else.
 - Low-stock alerts via per-item threshold - dashboard, stock page and email all
   name **which store** is short; a transfer that drains the source below its
   threshold triggers the alert too.
@@ -396,7 +423,25 @@ member's QR badge/card.
   payment lifts the lock immediately.
 
 ### 4.15 Super Admin
-`super@bridge.app` gets a platform workspace with two nav items:
+A Super Admin has **no company of their own**, so the workspace routes
+(`/dashboard`, `/projects`, `/stock`, `/settings`…) are not available to them
+directly - they answer `400 needsWorkspace` with a pointer to open a company.
+Acting inside a company is done through **Companies → Open as admin** (support
+mode), which is recorded in that company's audit trail.
+
+Companies can be **suspended** (reversible - blocks login, keeps everything) or
+**deleted permanently**. Deletion erases the company and every row belonging to
+it - users, projects, phases, daily reports, attendance, workers, stock, issues
+and returns, documents, messages, audit trail and payment history - and unlinks
+its uploaded files from disk. It is guarded three ways: Super Admin only, not
+available from inside a support session, and the exact company name must be
+typed back (checked again server-side, so the API cannot be driven around the
+UI). There is no undo. Because a deleted company takes its own audit rows with
+it, the platform keeps a `DeletedClient` record - company, plan, who deleted it
+and row counts - readable at `GET /api/admin/deleted-clients`.
+
+The Super Admin (the `SUPER` role - one account, created by the seed from
+`SUPER_EMAIL`/`SUPER_PASSWORD`) gets a platform workspace with two nav items:
 
 - **Dashboard**: monthly finance cards - **Received this month** (confirmed
   payments), **Due this month** (companies whose trial/coverage ends in the month),
@@ -466,7 +511,10 @@ Base URL `/api`. All routes except `auth/*` and `demo/*` require
 | PATCH | `/stock/transfers/:id` | source-store manager or stock.approve | APPROVED moves the stock / REJECTED |
 | GET | `/stock/card/:cardId` | stock.issue | resolve a scanned card → worker or team member |
 | POST | `/stock/issues` | stock.issue | hand items to a card-identified person; deducts stock |
-| GET | `/stock/issues` | stock.view | issued-items log (store-scoped for assigned managers) |
+| GET | `/stock/issues` | stock.view | issued-items log with `returnedQty`/`outstanding` per line (store-scoped for assigned managers) |
+| GET | `/stock/outstanding/:cardId` | stock.issue | what that person is still holding - the returns picker |
+| POST | `/stock/returns` | stock.issue | hand-back against one issue: `items[{issueItemId, qty, condition}]`; good ⇒ back into stock, damaged ⇒ Damaged-items log |
+| GET | `/stock/returns` | stock.view | returns log (store-scoped for assigned managers) |
 | GET/POST | `/stock/requests` | stock.view / stock.request | |
 | PATCH | `/stock/requests/:id` | stock.approve | APPROVED / REJECTED |
 | GET/POST | `/stock/damaged` | damaged.view / stock.edit | |
@@ -526,7 +574,9 @@ Base URL `/api`. All routes except `auth/*` and `demo/*` require
 | GET | `/admin/dashboard` | monthly received/pending/due + renewal reminders + status counts |
 | GET/PATCH | `/admin/settings` | platform settings (`renewalReminderDays`, 1–60) |
 | GET | `/admin/clients` | all tenants + counts, plan, paidUntil, renewalAt |
-| PATCH | `/admin/clients/:id` | `{ status: TRIAL\|ACTIVE\|SUSPENDED\|TERMINATED }` |
+| PATCH | `/admin/clients/:id` | `{ status: TRIAL\|ACTIVE\|SUSPENDED\|TERMINATED }` (reversible) |
+| DELETE | `/admin/clients/:id` | **permanent** - erases the company and every row + file it owns. Body must be `{ confirm: "<exact company name>" }`; refused from inside support mode. No undo. |
+| GET | `/admin/deleted-clients` | record of permanently deleted companies (who, when, what was removed) |
 | GET | `/admin/payments` | MoMo payment queue (all companies) |
 | PATCH | `/admin/payments/:id` | `{ action: confirm\|reject }` - confirm activates the company |
 | GET | `/admin/demos` | demo-booking book (lifecycle: scheduled/done/no-show/canceled, time tracking) |
@@ -629,7 +679,9 @@ Full hosting walkthrough (VPS with PM2/nginx/certbot, or Railway/Render):
 5. **Mailer**: wire nodemailer for password resets (remove `devToken` from
    `/auth/forgot`), demo-booking notifications, and renewal-reminder emails.
 6. **Jitsi**: self-host (Docker) or 8x8 JaaS; change `JITSI_BASE` in `Chat.jsx`.
-7. **Seeded super admin**: change `super@bridge.app`'s password (or replace the user).
+7. **Demo accounts**: run `npm run purge:demo` (or `-- --wipe`). The demo logins
+   share one password that is referenced in this repo; they must not exist on a
+   reachable instance. Confirm only the intended `SUPER` account can sign in.
 
 ## 9. Known gaps / roadmap (PRD phases 3–5)
 

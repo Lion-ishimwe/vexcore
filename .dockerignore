@@ -5,6 +5,7 @@
 **/dist
 api/.env
 api/uploads
+backups
 *.md
 docker-compose.yml
 .env

@@ -109,6 +109,9 @@ img.logo-mark, img.idc2-logo { object-fit: cover; background: #fff; }
   font-size: 13px; font-family: inherit; color: var(--text); text-align: left;
 }
 .tm-menu button:hover { background: #f9fafb; }
+/* Destructive entries read as destructive before they are clicked. */
+.tm-menu button.danger { color: #b91c1c; border-top: 1px solid #f1f5f9; }
+.tm-menu button.danger:hover { background: #fef2f2; }
 .tm-body { display: flex; align-items: center; gap: 12px; padding: 16px 14px; }
 .tm-body .avatar { width: 46px; height: 46px; font-size: 16px; flex-shrink: 0; }
 .tm-id { min-width: 0; display: flex; flex-direction: column; gap: 2px; }
@@ -476,6 +479,32 @@ a.plain { color: var(--blue); text-decoration: none; }
   background: var(--card); border-radius: 14px; padding: 22px;
   width: 100%; max-width: 460px; max-height: 88vh; overflow-y: auto;
 }
+/* ---------- Confirm / alert / prompt dialogs ----------
+   Replaces the browser's native window.confirm bar. Sits above ordinary modals
+   so a confirmation raised from inside one is still reachable. */
+.dialog-back { z-index: 90; }
+.dialog { max-width: 420px; }
+.dialog-head { display: flex; align-items: center; gap: 11px; margin-bottom: 12px; }
+.dialog-head b { font-size: 15.5px; }
+.dialog-icon {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 34px; height: 34px; border-radius: 50%; flex: none;
+  background: #fef3c7; color: #92400e;
+}
+.dialog-icon.danger { background: #fee2e2; color: #b91c1c; }
+.dialog-icon.info { background: #dbeafe; color: #1d4ed8; }
+.dialog-text {
+  margin: 0 0 16px; font-size: 13.5px; line-height: 1.65; color: var(--muted);
+  white-space: pre-line; /* keeps the blank lines in multi-paragraph messages */
+}
+.dialog-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 18px; }
+.btn.danger { background: #dc2626; color: #fff; }
+.btn.danger:hover { background: #b91c1c; }
+@media (max-width: 520px) {
+  .dialog-actions { flex-direction: column-reverse; }
+  .dialog-actions .btn { width: 100%; justify-content: center; }
+}
+
 .media-img { width: 84px; height: 60px; border-radius: 8px; object-fit: cover; cursor: pointer; }
 .spin { text-align: center; padding: 40px; color: var(--muted); }
 

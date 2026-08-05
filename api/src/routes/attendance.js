@@ -48,33 +48,64 @@ const closedWindowError = (set) =>
 async function rolloverStale(client) {
   const clientId = client.id
   const today = startOfToday()
+  const set = settingsOf(client)
   const stale = await db.attendanceSession.findMany({
     where: { clientId, NOT: { mode: 'closed' }, date: { lt: today } },
     orderBy: { id: 'desc' }, // most recent scope becomes the live one
   })
-  const liveSeen = new Set()
+
+  // Which projects already have a session today - a concurrent request may have
+  // created one a moment ago. Without this check two simultaneous calls each
+  // created a replacement and the project ended up with duplicate open sessions.
+  const existingToday = await db.attendanceSession.findMany({
+    where: { clientId, date: { gte: today } },
+    select: { projectId: true, mode: true },
+  })
+  const hasToday = new Set(existingToday.map(s => s.projectId))
+  const liveToday = new Set(existingToday.filter(s => s.mode !== 'closed').map(s => s.projectId))
+
   for (const s of stale) {
+    // Auto clock-out lands at the end of the clock-out window when one is
+    // configured, otherwise at 18:00 - NOT 23:59, which credited a worker who
+    // forgot to tap out with roughly seventeen hours on site.
     const endOfDay = new Date(s.date)
-    endOfDay.setHours(23, 59, 0, 0)
-    await db.attendanceRecord.updateMany({
-      where: { sessionId: s.id, clockOutAt: null, NOT: { clockInAt: null } },
-      data: { clockOutAt: endOfDay, outMethod: 'auto', outBy: 'auto-close 00:00' },
-    })
-    await db.attendanceSession.update({
-      where: { id: s.id },
-      data: { mode: 'closed', closedAt: endOfDay, closedBy: 'system (00:00)' },
-    })
-    const live = !liveSeen.has(s.projectId)
-    liveSeen.add(s.projectId)
+    if (set.attWindows && /^\d{2}:\d{2}$/.test(set.attOutEnd ?? '')) {
+      const [h, m] = set.attOutEnd.split(':').map(Number)
+      endOfDay.setHours(h, m, 0, 0)
+    } else {
+      endOfDay.setHours(18, 0, 0, 0)
+    }
+    const label = `system (day rollover, ${String(endOfDay.getHours()).padStart(2, '0')}:${String(endOfDay.getMinutes()).padStart(2, '0')})`
+
+    await db.$transaction([
+      db.attendanceRecord.updateMany({
+        where: { sessionId: s.id, clockOutAt: null, NOT: { clockInAt: null } },
+        data: { clockOutAt: endOfDay, outMethod: 'auto', outBy: label },
+      }),
+      db.attendanceSession.update({
+        where: { id: s.id },
+        data: { mode: 'closed', closedAt: endOfDay, closedBy: label },
+      }),
+    ])
+
+    // Only carry a project forward if somebody actually used the stale session.
+    // Re-creating unconditionally made an abandoned session immortal: it
+    // respawned every single day for ever, and /sessions/active kept reporting
+    // a live session nobody had opened.
+    const used = await db.attendanceRecord.count({ where: { sessionId: s.id } })
+    if (!used || hasToday.has(s.projectId)) continue
+
+    const live = !liveToday.has(s.projectId)
+    liveToday.add(s.projectId)
+    hasToday.add(s.projectId)
     await db.attendanceSession.create({
       data: {
         clientId, projectId: s.projectId, phaseId: s.phaseId, date: today,
-        mode: 'in', paused: !live, openedBy: 'system (00:00)',
+        mode: 'in', paused: !live, openedBy: 'system (day rollover)',
       },
     })
   }
 
-  const set = settingsOf(client)
   if (!set.attWindows) return
   const now = new Date()
   const mins = now.getHours() * 60 + now.getMinutes()
@@ -288,6 +319,13 @@ r.patch('/workers/:id', requireCap('workers.manage'), async (req, res) => {
       const taken = await db.worker.findFirst({ where: { clientId: req.client.id, cardId } })
       if (taken && taken.id !== worker.id)
         return res.status(409).json({ error: 'That card is already assigned to another worker' })
+      // Workers and team members share ONE card namespace, and scans resolve
+      // workers first - so without this check a worker could be given a
+      // colleague's badge id and quietly receive their stock issues and
+      // attendance taps.
+      const staff = await db.user.findFirst({ where: { clientId: req.client.id, cardId }, select: { name: true } })
+      if (staff)
+        return res.status(409).json({ error: `That id is ${staff.name}'s team badge - pick a different card id` })
     }
     data.cardId = cardId
   }
@@ -459,10 +497,7 @@ r.get('/sessions/active', requireCap('attendance.view'), async (req, res) => {
 
 r.get('/sessions/:id', requireCap('attendance.view'), async (req, res) => {
   await rolloverStale(req.client)
-  const session = await db.attendanceSession.findFirst({
-    where: { id: +req.params.id, clientId: req.client.id },
-    include: SESSION_INCLUDE,
-  })
+  const session = await sessionInScope(req, +req.params.id, SESSION_INCLUDE)
   if (!session) return res.status(404).json({ error: 'Session not found' })
   res.json(shapeSession(session, req.client))
 })
@@ -522,10 +557,7 @@ r.post('/sessions', requireCap('attendance.session'), async (req, res) => {
 
 // Flip clock-in/clock-out mode (any recorder), or close the session (managers)
 r.patch('/sessions/:id', requireCap('attendance.record'), async (req, res) => {
-  const session = await db.attendanceSession.findFirst({
-    where: { id: +req.params.id, clientId: req.client.id },
-    include: { project: { select: { name: true } } },
-  })
+  const session = await sessionInScope(req, +req.params.id, { project: { select: { name: true } } })
   if (!session) return res.status(404).json({ error: 'Session not found' })
   if (session.mode === 'closed') return res.status(400).json({ error: 'Session is closed' })
 
@@ -591,9 +623,42 @@ r.patch('/sessions/:id', requireCap('attendance.record'), async (req, res) => {
 
 async function openSession(req, id) {
   await rolloverStale(req.client)
-  return db.attendanceSession.findFirst({
+  const session = await db.attendanceSession.findFirst({
     where: { id, clientId: req.client.id, NOT: { mode: 'closed' } },
   })
+  // Reaching a session by id used to check only the company, so an engineer
+  // assigned to one project could scan and clock out workers on another
+  // project's live session - and those records carry wages.
+  if (!session) return null
+  const ids = await scopedProjectIds(req)
+  return inScope(ids, session.projectId) ? session : null
+}
+
+// Same check for the routes that read or edit a session by id.
+async function sessionInScope(req, id, include) {
+  const session = await db.attendanceSession.findFirst({
+    where: { id, clientId: req.client.id },
+    ...(include ? { include } : {}),
+  })
+  if (!session) return null
+  const ids = await scopedProjectIds(req)
+  return inScope(ids, session.projectId) ? session : null
+}
+
+// Two taps landing in the same instant both read "no record yet" and both
+// insert. The unique index keeps the data honest, but the caller used to get a
+// bare 500 - on a gate kiosk that reads as "the system is broken" when in fact
+// the worker is already clocked in.
+async function insertRecord(data) {
+  try {
+    return { rec: await db.attendanceRecord.create({ data }) }
+  } catch (e) {
+    if (e?.code !== 'P2002') throw e
+    const where = data.workerId
+      ? { sessionId_workerId: { sessionId: data.sessionId, workerId: data.workerId } }
+      : { sessionId_userId: { sessionId: data.sessionId, userId: data.userId } }
+    return { rec: await db.attendanceRecord.findUnique({ where }), duplicate: true }
+  }
 }
 
 // Card tap (kiosk / USB HID reader) → auto record
@@ -626,9 +691,14 @@ r.post('/sessions/:id/scan', requireCap('attendance.record'), async (req, res) =
     })
     if (action === 'in') {
       if (existing?.clockInAt) return res.json({ action: 'dup', worker: who, at: existing.clockInAt })
-      const rec = existing
-        ? await db.attendanceRecord.update({ where: { id: existing.id }, data: { clockInAt: new Date(), inMethod: 'auto', inBy: 'card' } })
-        : await db.attendanceRecord.create({ data: { sessionId: session.id, userId: member.id, clockInAt: new Date(), inMethod: 'auto', inBy: 'card' } })
+      let rec
+      if (existing) {
+        rec = await db.attendanceRecord.update({ where: { id: existing.id }, data: { clockInAt: new Date(), inMethod: 'auto', inBy: 'card' } })
+      } else {
+        const r = await insertRecord({ sessionId: session.id, userId: member.id, clockInAt: new Date(), inMethod: 'auto', inBy: 'card' })
+        if (r.duplicate) return res.json({ action: 'dup', worker: who, at: r.rec?.clockInAt })
+        rec = r.rec
+      }
       return res.json({ action: 'in', worker: who, at: rec.clockInAt })
     }
     if (!existing?.clockInAt) return res.status(400).json({ error: `${member.name} was never clocked in today`, worker: { name: member.name } })
@@ -648,9 +718,14 @@ r.post('/sessions/:id/scan', requireCap('attendance.record'), async (req, res) =
     if (existing?.clockInAt) {
       return res.json({ action: 'dup', worker: { name: worker.name, type: worker.type }, at: existing.clockInAt })
     }
-    const rec = existing
-      ? await db.attendanceRecord.update({ where: { id: existing.id }, data: { clockInAt: new Date(), inMethod: 'auto', inBy: 'card', rateSnap: worker.dailyRate } })
-      : await db.attendanceRecord.create({ data: { sessionId: session.id, workerId: worker.id, clockInAt: new Date(), inMethod: 'auto', inBy: 'card', rateSnap: worker.dailyRate } })
+    let rec
+    if (existing) {
+      rec = await db.attendanceRecord.update({ where: { id: existing.id }, data: { clockInAt: new Date(), inMethod: 'auto', inBy: 'card', rateSnap: worker.dailyRate } })
+    } else {
+      const r = await insertRecord({ sessionId: session.id, workerId: worker.id, clockInAt: new Date(), inMethod: 'auto', inBy: 'card', rateSnap: worker.dailyRate })
+      if (r.duplicate) return res.json({ action: 'dup', worker: { name: worker.name, type: worker.type }, at: r.rec?.clockInAt })
+      rec = r.rec
+    }
     return res.json({ action: 'in', worker: { name: worker.name, type: worker.type }, at: rec.clockInAt })
   }
 
@@ -692,10 +767,11 @@ r.post('/sessions/:id/tick', requireCap('attendance.record'), async (req, res) =
       await db.attendanceRecord.delete({ where: { id: existing.id } })
       return res.json({ action: 'undo-in' })
     }
-    await db.attendanceRecord.create({
-      data: { sessionId: session.id, workerId: worker.id, clockInAt: new Date(), inMethod: 'manual', inBy: req.user.name, rateSnap: worker.dailyRate },
+    const r = await insertRecord({
+      sessionId: session.id, workerId: worker.id, clockInAt: new Date(),
+      inMethod: 'manual', inBy: req.user.name, rateSnap: worker.dailyRate,
     })
-    return res.json({ action: 'in' })
+    return res.json({ action: r.duplicate ? 'dup' : 'in' })
   }
 
   if (!existing?.clockInAt) return res.status(400).json({ error: `${worker.name} was never clocked in` })
@@ -716,9 +792,14 @@ r.post('/sessions/:id/tick', requireCap('attendance.record'), async (req, res) =
 // automatically: who attended, their worker type, and which phase.
 r.get('/counts', requireCap('attendance.view'), async (req, res) => {
   await rolloverStale(req.client)
+  const ids = await scopedProjectIds(req)
+  // projectId came straight off the query string, so a scoped user could read
+  // another project's head-count.
+  const asked = +req.query.projectId || null
+  if (asked && !inScope(ids, asked)) return res.status(404).json({ error: 'Project not found' })
   const where = {
     clientId: req.client.id, date: { gte: startOfToday() },
-    ...(req.query.projectId ? { projectId: +req.query.projectId } : {}),
+    ...(asked ? { projectId: asked } : ids ? { projectId: { in: ids } } : {}),
     ...(req.query.phaseId ? { phaseId: +req.query.phaseId } : {}),
   }
   const sessions = await db.attendanceSession.findMany({

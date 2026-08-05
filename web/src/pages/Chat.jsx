@@ -80,17 +80,33 @@ export default function Chat() {
   convoRef.current = convo
 
   const load = () => {
-    api(`/messages?to=${convoRef.current}`).then((msgs) => {
+    // Remember which conversation this request was for. On a slow link the
+    // 4-second poll for one thread could land after the user switched to
+    // another, painting the wrong messages under the new header - and marking
+    // the new thread read using the old thread's data.
+    const asked = convoRef.current
+    api(`/messages?to=${asked}`).then((msgs) => {
+      if (convoRef.current !== asked) return
       setMessages(msgs)
-      markSeen(String(convoRef.current))
-    }).catch((e) => setError(e.message))
+      markSeen(String(asked))
+    }).catch((e) => { if (convoRef.current === asked) setError(e.message) })
     api('/messages/threads').then(setThreads).catch(() => {})
   }
 
   useEffect(() => {
     api('/members').then(setMembers).catch(() => {})
     const t = setInterval(load, 4000)
-    return () => { clearInterval(t); stopTimer() }
+    return () => {
+      clearInterval(t)
+      stopTimer()
+      // Leaving the page mid-recording used to leave the microphone open for
+      // the rest of the session (rec.onstop never fires if nobody stops it).
+      const rec = recRef.current
+      if (rec && rec.state !== 'inactive') {
+        try { rec.stop() } catch { /* already gone */ }
+        rec.stream?.getTracks?.().forEach((t) => t.stop())
+      }
+    }
   }, [])
 
   useEffect(() => { setMessages(null); load() }, [convo])

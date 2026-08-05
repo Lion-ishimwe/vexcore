@@ -1,12 +1,13 @@
 import { useEffect, useRef, useState } from 'react'
-import { Lock, FileSpreadsheet, Upload, CheckCircle2, CreditCard, PackageCheck, X, Camera, CameraOff, Warehouse, Pencil, Trash2, ArrowLeftRight } from 'lucide-react'
+import { Lock, FileSpreadsheet, Upload, CheckCircle2, CreditCard, PackageCheck, X, Camera, CameraOff, Warehouse, Pencil, Trash2, ArrowLeftRight, Undo2, AlertTriangle } from 'lucide-react'
 import { api, fmtMoney, fmtDate } from '../api.js'
 import { useAuth } from '../auth.jsx'
-import { Modal, Field, ErrorNote, Avatar, useForm } from '../ui.jsx'
+import { Modal, Field, ErrorNote, Avatar, useForm, useDialog } from '../ui.jsx'
 import QrScanner from '../QrScanner.jsx'
 
 export default function Stock() {
   const { user, client, can } = useAuth()
+  const { confirm, alert, prompt } = useDialog()
   const [items, setItems] = useState(null)
   const [requests, setRequests] = useState([])
   const [damaged, setDamaged] = useState([])
@@ -41,6 +42,19 @@ export default function Stock() {
   const [issueNote, setIssueNote] = useState('')
   const [issueBusy, setIssueBusy] = useState(false)
   const [scanCam, setScanCam] = useState(false) // camera QR scanning in the issue modal
+  // returns: unused items coming back from site against the original hand-out
+  const [returns, setReturns] = useState([])
+  const [retCard, setRetCard] = useState('')
+  const [retHolder, setRetHolder] = useState(null) // { person, issues[], outstanding } for that card
+  const [retQty, setRetQty] = useState({}) // issueItemId → { good, damaged }
+  const [retIssueId, setRetIssueId] = useState(null) // one hand-out at a time
+  const [retNote, setRetNote] = useState('')
+  const [retBusy, setRetBusy] = useState(false)
+  const [retCam, setRetCam] = useState(false)
+  // Guards against a slow card lookup landing after a newer one and naming the
+  // wrong person on the slip.
+  const cardGen = useRef(0)
+  const retGen = useRef(0)
 
   const showMoney = can('stock.amounts')
   const canEdit = can('stock.edit')
@@ -59,6 +73,7 @@ export default function Stock() {
     api('/members').then((ms) => setMembers(ms.filter((m) => m.role === 'STOCK'))).catch(() => {})
     api('/stock/requests').then(setRequests).catch(() => {})
     api('/stock/issues').then(setIssues).catch(() => {})
+    api('/stock/returns').then(setReturns).catch(() => {})
     if (can('damaged.view')) api('/stock/damaged').then(setDamaged).catch(() => {})
     api('/projects').then((ps) => setProjects(ps.map((p) => ({ id: p.id, name: p.name })))).catch(() => {})
   }
@@ -70,21 +85,50 @@ export default function Stock() {
     setRecipient(null)
     const id = card.trim()
     if (!id) return
+    // Each lookup carries a generation number: scanning card A then card B used
+    // to leave A's slower response naming the recipient while B's id was sent
+    // with the issue, crediting the wrong person on a permanent record.
+    const mine = ++cardGen.current
     const t = setTimeout(() => {
       api(`/stock/card/${encodeURIComponent(id)}`)
-        .then(setRecipient)
-        .catch(() => setRecipient(null))
+        .then((r) => { if (mine === cardGen.current) setRecipient(r) })
+        .catch(() => { if (mine === cardGen.current) setRecipient(null) })
     }, 250)
     return () => clearTimeout(t)
   }, [card])
 
+  // Returns: the same lookup, but it also pulls what this person still holds.
+  useEffect(() => {
+    setRetHolder(null); setRetQty({}); setRetIssueId(null)
+    const id = retCard.trim()
+    if (!id) return
+    const mine = ++retGen.current
+    const t = setTimeout(() => {
+      api(`/stock/outstanding/${encodeURIComponent(id)}`)
+        .then((r) => {
+          if (mine !== retGen.current) return
+          setRetHolder(r)
+          if (r.issues.length === 1) setRetIssueId(r.issues[0].id)
+        })
+        .catch(() => { if (mine === retGen.current) setRetHolder(null) })
+    }, 250)
+    return () => clearTimeout(t)
+  }, [retCard])
+  useEffect(() => { if (retHolder && retCam) setRetCam(false) }, [retHolder, retCam])
+
+  // Guards the create forms against a second tap on a slow connection, which
+  // otherwise inserts the same product twice.
+  const [saving, setSaving] = useState(false)
+
   const insert = async (e) => {
     e.preventDefault(); setFormError(null)
+    if (saving) return
+    setSaving(true)
     try {
       await api('/stock', { method: 'POST', body: iv })
       setModal(null); isetAll({ name: '', category: 'Consumable', qty: '', unit: 'pcs', unitCost: '', serial: '', lowThreshold: '', projectId: '', storeId: '' })
       load()
-    } catch (err) { setFormError(err.message) }
+    } catch (err) { setFormError(err.message) } finally { setSaving(false) }
   }
 
   // ---- Stores ----
@@ -120,13 +164,18 @@ export default function Stock() {
   // Who may decide: the source store's manager, or stock.approve (senior/admin)
   const canDecide = (t) => t.status === 'PENDING' && (can('stock.approve') || t.from.managerId === user.id)
   const renameStore = async (s) => {
-    const name = window.prompt(`Rename store "${s.name}" to:`, s.name)
+    const name = await prompt('', s.name, { title: `Rename store "${s.name}"`, confirmText: 'Rename' })
     if (!name || name.trim() === s.name) return
     try { await api(`/stock/stores/${s.id}`, { method: 'PATCH', body: { name: name.trim() } }); load() }
     catch (err) { setFormError(err.message) }
   }
   const deleteStore = async (s) => {
-    if (!window.confirm(`Delete store "${s.name}"?${s.items ? ` Its ${s.items} item${s.items === 1 ? '' : 's'} will move to the project's unassigned stock.` : ''}`)) return
+    const ok = await confirm(
+      s.items
+        ? `Its ${s.items} item${s.items === 1 ? '' : 's'} will move to the project's unassigned stock - nothing is lost.`
+        : 'The store is empty, so nothing moves.',
+      { title: `Delete store "${s.name}"?`, confirmText: 'Delete store', danger: true })
+    if (!ok) return
     try { await api(`/stock/stores/${s.id}`, { method: 'DELETE' }); if (storeF === String(s.id)) setStoreF(''); load() }
     catch (err) { setFormError(err.message) }
   }
@@ -246,6 +295,75 @@ export default function Stock() {
     } catch (err) { setFormError(err.message) } finally { setIssueBusy(false) }
   }
 
+  // ---- Returns: unused items coming back from site ----
+  // A worker takes 100 bags in the morning and hands the rest back in the
+  // afternoon; the hand-back is recorded against the original issue so what
+  // they still hold is always known. Good items go back into stock; damaged
+  // ones are logged as damaged instead.
+  const openReturn = () => {
+    setFormError(null)
+    setRetCard(''); setRetHolder(null); setRetQty({}); setRetIssueId(null)
+    setRetNote(''); setRetCam(false)
+    setModal('return')
+  }
+
+  const retIssue = retHolder?.issues.find((i) => i.id === retIssueId) ?? null
+  const retLine = (id) => retQty[id] ?? { good: '', damaged: '' }
+  const setRetLine = (id, key, value) =>
+    setRetQty((q) => ({ ...q, [id]: { ...retLine(id), [key]: value } }))
+
+  // "Return everything still out" - the common case at the end of a shift.
+  const fillAllOutstanding = () => {
+    if (!retIssue) return
+    const next = {}
+    for (const it of retIssue.items) if (it.outstanding > 0) next[it.id] = { good: String(it.outstanding), damaged: '' }
+    setRetQty(next)
+  }
+
+  const returnRows = () => {
+    const rows = []
+    for (const [issueItemId, cell] of Object.entries(retQty)) {
+      const good = Number(cell.good) || 0
+      const damaged = Number(cell.damaged) || 0
+      if (good > 0) rows.push({ issueItemId: +issueItemId, qty: good, condition: 'good' })
+      if (damaged > 0) rows.push({ issueItemId: +issueItemId, qty: damaged, condition: 'damaged' })
+    }
+    return rows
+  }
+
+  const submitReturn = async (e) => {
+    e.preventDefault()
+    setFormError(null)
+    if (!retHolder) return setFormError("Scan the card's QR code or type the card id first")
+    if (!retIssue) return setFormError('Pick which hand-out the items are coming back from')
+    const rows = returnRows()
+    if (!rows.length) return setFormError('Enter at least one quantity to return')
+    // Mirror the server's rule so the storekeeper is told before submitting.
+    for (const it of retIssue.items) {
+      const cell = retLine(it.id)
+      const total = (Number(cell.good) || 0) + (Number(cell.damaged) || 0)
+      if (total > it.outstanding)
+        return setFormError(`${it.name}: only ${it.outstanding} ${it.unit} still out`)
+    }
+    setRetBusy(true)
+    try {
+      const r = await api('/stock/returns', {
+        method: 'POST',
+        body: { cardId: retCard.trim(), items: rows, note: retNote },
+      })
+      setModal(null)
+      load()
+      setError(null)
+      // Damaged goods do not go back into the usable quantity, so say so
+      // plainly rather than letting the storekeeper assume everything restocked.
+      if (r.damaged?.length)
+        await alert(
+          `Back into stock: ${r.restocked.join(', ') || 'nothing'}\n\n` +
+          `Logged as damaged (NOT restocked): ${r.damaged.join(', ')}`,
+          { title: 'Return recorded' })
+    } catch (err) { setFormError(err.message) } finally { setRetBusy(false) }
+  }
+
   if (error) return <div className="error-note">{error}</div>
   if (!items) return <div className="spin">Loading stock…</div>
   const visible = items.filter((i) =>
@@ -264,6 +382,11 @@ export default function Stock() {
         <div style={{ display: 'flex', gap: 8 }}>
           {can('stock.issue') && (
             <button className="btn" onClick={openIssue}><PackageCheck size={14} /> Issue items</button>
+          )}
+          {can('stock.issue') && (
+            <button className="btn ghost" onClick={openReturn} title="Record unused items coming back from site">
+              <Undo2 size={14} /> Record return
+            </button>
           )}
           {canRequest && transferable.length > 0 && stores.length > 0 && (
             <button className="btn ghost sm" onClick={() => { setFormError(null); tsetAll({ itemId: '', toStoreId: myStore ? String(myStore.id) : '', qty: '', note: '' }); setModal('transfer') }}>
@@ -456,7 +579,7 @@ export default function Stock() {
       <div className="card table-card">
         <table>
           <thead>
-            <tr><th>When</th><th>Given to</th><th>Items</th>{showMoney && <th>Value</th>}<th>Issued by</th><th>Proof</th></tr>
+            <tr><th>When</th><th>Given to</th><th>Items</th><th>Still out</th>{showMoney && <th>Value</th>}<th>Issued by</th><th>Proof</th></tr>
           </thead>
           <tbody>
             {issues.map((i) => (
@@ -469,8 +592,20 @@ export default function Stock() {
                   </div>
                 </td>
                 <td className="small">
-                  {i.items.map((it, x) => <div key={x}>{it.qty.toLocaleString()} {it.unit} × {it.name}</div>)}
+                  {i.items.map((it, x) => (
+                    <div key={x}>
+                      {it.qty.toLocaleString()} {it.unit} × {it.name}
+                      {it.returnedQty > 0 && (
+                        <span className="muted"> · {it.returnedQty.toLocaleString()} returned</span>
+                      )}
+                    </div>
+                  ))}
                   {i.note && <div className="muted">“{i.note}”</div>}
+                </td>
+                <td>
+                  {i.outstanding > 0
+                    ? <span className="badge amber">{i.outstanding.toLocaleString()} out</span>
+                    : <span className="badge green"><CheckCircle2 size={10} /> all back</span>}
                 </td>
                 {showMoney && <td>{fmtMoney(i.total, cur)}</td>}
                 <td className="muted">{i.issuedBy}</td>
@@ -481,7 +616,47 @@ export default function Stock() {
                 </td>
               </tr>
             ))}
-            {!issues.length && <tr><td colSpan={showMoney ? 6 : 5} className="muted">Nothing issued yet - use “Issue items” to record who received materials.</td></tr>}
+            {!issues.length && <tr><td colSpan={showMoney ? 7 : 6} className="muted">Nothing issued yet - use “Issue items” to record who received materials.</td></tr>}
+          </tbody>
+        </table>
+      </div>
+
+      <div className="section-title" style={{ marginTop: 16 }}>Returned items - what came back from site</div>
+      <div className="card table-card">
+        <table>
+          <thead>
+            <tr><th>When</th><th>Returned by</th><th>Items</th>{showMoney && <th>Value</th>}<th>Received by</th></tr>
+          </thead>
+          <tbody>
+            {returns.map((rt) => (
+              <tr key={rt.id}>
+                <td className="muted" style={{ whiteSpace: 'nowrap' }}>{fmtDate(rt.createdAt)}</td>
+                <td>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 9 }}>
+                    <Avatar name={rt.person.name} photo={rt.person.photo} />
+                    <div><b>{rt.person.name}</b><div className="small muted">{rt.person.kind === 'worker' ? rt.person.sub : (rt.person.sub || 'team member').toLowerCase()}</div></div>
+                  </div>
+                </td>
+                <td className="small">
+                  {rt.items.map((it, x) => (
+                    <div key={x}>
+                      {it.qty.toLocaleString()} {it.unit} × {it.name}
+                      {it.condition === 'damaged'
+                        ? <span className="badge red" style={{ marginLeft: 6 }}><AlertTriangle size={10} /> damaged</span>
+                        : <span className="muted"> · back in stock</span>}
+                    </div>
+                  ))}
+                  {rt.note && <div className="muted">“{rt.note}”</div>}
+                </td>
+                {showMoney && <td>{fmtMoney(rt.total, cur)}</td>}
+                <td className="muted">{rt.receivedBy}</td>
+              </tr>
+            ))}
+            {!returns.length && (
+              <tr><td colSpan={showMoney ? 5 : 4} className="muted">
+                Nothing returned yet - use “Record return” when a worker brings unused items back from site.
+              </td></tr>
+            )}
           </tbody>
         </table>
       </div>
@@ -549,6 +724,112 @@ export default function Stock() {
         </Modal>
       )}
 
+      {modal === 'return' && (
+        <Modal title="Record a return - unused items coming back" onClose={() => setModal(null)}>
+          <ErrorNote error={formError} />
+          <form onSubmit={submitReturn}>
+            <Field label="Scan the card of the person handing the items back">
+              <div style={{ display: 'flex', gap: 8 }}>
+                <input value={retCard} autoFocus placeholder="e.g. C1-ABC234" style={{ flex: 1 }}
+                  onChange={(e) => setRetCard(e.target.value)} />
+                <button type="button" className={`btn ${retCam ? '' : 'ghost'}`} title={retCam ? 'Stop camera' : 'Scan QR with camera'}
+                  onClick={() => setRetCam((s) => !s)}>
+                  {retCam ? <CameraOff size={15} /> : <Camera size={15} />}
+                </button>
+              </div>
+              {retCam && (
+                <div style={{ marginTop: 10 }}>
+                  <QrScanner onScan={(code) => setRetCard(code)} />
+                  <div className="small muted" style={{ marginTop: 6 }}>Point the camera at the QR code on the card.</div>
+                </div>
+              )}
+            </Field>
+
+            {retCard.trim() && !retHolder && (
+              <div className="error-note">Card not recognised yet - keep scanning or check the id.</div>
+            )}
+
+            {retHolder && retHolder.outstanding === 0 && (
+              <div className="ok-note">
+                <b>{retHolder.person.name}</b> has nothing outstanding - everything issued to them is already back.
+              </div>
+            )}
+
+            {retHolder && retHolder.outstanding > 0 && (
+              <>
+                <div className="ok-note" style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                  <CheckCircle2 size={14} /> Returning from: <b>{retHolder.person.name}</b>
+                  <span className="muted small">({retHolder.person.kind === 'worker' ? retHolder.person.sub : retHolder.person.sub.toLowerCase()})</span>
+                  <span className="badge amber">{retHolder.outstanding.toLocaleString()} still out</span>
+                </div>
+
+                {retHolder.issues.length > 1 && (
+                  <Field label="Which hand-out are these items from?">
+                    <select value={retIssueId ?? ''} onChange={(e) => { setRetIssueId(+e.target.value || null); setRetQty({}) }}>
+                      <option value="">- Select the hand-out -</option>
+                      {retHolder.issues.map((i) => (
+                        <option key={i.id} value={i.id}>
+                          {fmtDate(i.createdAt)} · {i.outstanding.toLocaleString()} still out
+                          {i.note ? ` · ${i.note}` : ''}
+                        </option>
+                      ))}
+                    </select>
+                  </Field>
+                )}
+
+                {retIssue && (
+                  <Field label="How much is coming back?">
+                    <div className="flex-between" style={{ marginBottom: 8 }}>
+                      <span className="small muted">Good items go back into stock; damaged ones are logged as damaged instead.</span>
+                      <button type="button" className="btn ghost sm" onClick={fillAllOutstanding}>Return everything</button>
+                    </div>
+                    <table style={{ width: '100%' }}>
+                      <thead>
+                        <tr>
+                          <th style={{ textAlign: 'left' }}>Item</th>
+                          <th style={{ width: 74 }}>Still out</th>
+                          <th style={{ width: 92 }}>Good</th>
+                          <th style={{ width: 92 }}>Damaged</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {retIssue.items.filter((it) => it.outstanding > 0).map((it) => (
+                          <tr key={it.id}>
+                            <td className="small"><b>{it.name}</b><div className="muted">{it.qty.toLocaleString()} {it.unit} taken</div></td>
+                            <td className="small">{it.outstanding.toLocaleString()} {it.unit}</td>
+                            <td>
+                              <input type="number" min="0" max={it.outstanding} placeholder="0" style={{ width: '100%' }}
+                                value={retLine(it.id).good}
+                                onChange={(e) => setRetLine(it.id, 'good', e.target.value)} />
+                            </td>
+                            <td>
+                              <input type="number" min="0" max={it.outstanding} placeholder="0" style={{ width: '100%' }}
+                                value={retLine(it.id).damaged}
+                                onChange={(e) => setRetLine(it.id, 'damaged', e.target.value)} />
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                    <div className="small muted" style={{ marginTop: 8 }}>
+                      Leave a row empty when nothing of that item is coming back - it stays outstanding against this person.
+                    </div>
+                  </Field>
+                )}
+
+                <Field label="Note (optional)">
+                  <input value={retNote} onChange={(e) => setRetNote(e.target.value)}
+                    placeholder="e.g. brought back after the afternoon pour" />
+                </Field>
+                <button className="btn" style={{ width: '100%', justifyContent: 'center' }} disabled={retBusy || !retIssue}>
+                  {retBusy ? 'Recording…' : 'Record return'}
+                </button>
+              </>
+            )}
+          </form>
+        </Modal>
+      )}
+
       {modal === 'insert' && (
         <Modal title="Insert stock" onClose={() => setModal(null)}>
           <ErrorNote error={formError} />
@@ -580,7 +861,9 @@ export default function Stock() {
               <Field label={`Unit amount (${cur})`}><input type="number" min="0" value={iv.unitCost} onChange={iset('unitCost')} /></Field>
               <Field label="Low-stock alert below"><input type="number" min="0" value={iv.lowThreshold} onChange={iset('lowThreshold')} /></Field>
             </div>
-            <button className="btn" style={{ width: '100%', justifyContent: 'center' }}>Insert</button>
+            <button className="btn" style={{ width: '100%', justifyContent: 'center' }} disabled={saving}>
+              {saving ? 'Inserting…' : 'Insert'}
+            </button>
           </form>
         </Modal>
       )}

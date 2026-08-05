@@ -9,12 +9,35 @@ const ahead = (d) => new Date(Date.now() + d * day)
 async function main() {
   const hash = await bcrypt.hash('demo1234', 10)
 
-  // Super admin (platform operator)
-  await db.user.upsert({
-    where: { email: 'super@bridge.app' },
-    update: {},
-    create: { name: 'Super Admin', email: 'super@bridge.app', passwordHash: await bcrypt.hash('super1234', 10), role: 'SUPER' },
-  })
+  // Super admin (platform operator). The password comes from the environment
+  // and there is NO default: this account owns every tenant on the platform,
+  // and a documented default password ('super1234' as it used to be) means
+  // anyone who reads the repo can sign in to a fresh deployment as Super Admin.
+  const superEmail = (process.env.SUPER_EMAIL || 'super@bridge.app').trim().toLowerCase()
+  const superPassword = process.env.SUPER_PASSWORD || ''
+  const existingSuper = await db.user.findUnique({ where: { email: superEmail } })
+  if (!existingSuper) {
+    if (superPassword.length < 12) {
+      console.error(
+        '\nRefusing to create the Super Admin without a strong password.\n' +
+        'Set SUPER_PASSWORD (12+ characters, and SUPER_EMAIL if you want a different address), e.g.\n' +
+        '  SUPER_PASSWORD="$(node -e "console.log(require(\'crypto\').randomBytes(18).toString(\'base64url\'))")" npm run seed\n')
+      process.exit(1)
+    }
+    await db.user.create({
+      data: { name: 'Super Admin', email: superEmail, passwordHash: await bcrypt.hash(superPassword, 10), role: 'SUPER' },
+    })
+    console.log(`Super Admin created: ${superEmail}`)
+  } else {
+    console.log(`Super Admin already exists (${superEmail}) - password left untouched.`)
+  }
+
+  // The demo dataset is opt-in and never loads by accident: its logins are
+  // published in the docs, so it must not exist on anything reachable.
+  if (process.env.SEED_DEMO !== 'true') {
+    console.log('SEED_DEMO is not "true" - skipping the demo company. Done.')
+    return
+  }
 
   if (await db.client.findFirst({ where: { company: 'Amahoro Construction Ltd' } })) {
     console.log('Demo client already seeded - skipping.')
@@ -135,7 +158,9 @@ async function main() {
 
   console.log('Seeded demo client + users. Logins (password demo1234):')
   console.log('  chantal@demo.rw (Client) · eric@demo.rw (Senior) · jp@demo.rw (Site) · divine@demo.rw (Stock) · guest@demo.rw (Guest)')
-  console.log('Super admin: super@bridge.app / super1234')
+  console.log('')
+  console.log('!! These logins are published in the documentation. Run `npm run purge:demo`')
+  console.log('!! before this instance is reachable by anyone else.')
 }
 
 main().then(() => process.exit(0)).catch((e) => { console.error(e); process.exit(1) })

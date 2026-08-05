@@ -34,7 +34,21 @@ ENV NODE_ENV=production
 ENV PORT=4311
 EXPOSE 4311
 
+# Ownership must be set BEFORE the VOLUME instruction: changes made to a volume
+# path afterwards are discarded, and a root-owned mountpoint would leave the
+# unprivileged user below unable to save uploads.
+RUN mkdir -p /app/api/uploads && chown -R node:node /app
+
 # Uploads (worker photos, report media, logos) live here - mount a volume
 VOLUME /app/api/uploads
+
+# Liveness: a Node process can keep its port bound while wedged, so "container
+# is Up" is not on its own evidence that the app is still serving.
+HEALTHCHECK --interval=30s --timeout=5s --start-period=40s --retries=3 \
+  CMD node -e "fetch('http://127.0.0.1:4311/healthz').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
+
+# Drop root: the app only needs to read its own code and write uploads. Without
+# this a compromise of the Node process is a root compromise of the container.
+USER node
 
 ENTRYPOINT ["/app/docker-entrypoint.sh"]

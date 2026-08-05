@@ -1,50 +1,57 @@
 import { Router } from 'express'
-import multer from 'multer'
 import path from 'node:path'
-import fs from 'node:fs'
 import { db, audit } from '../db.js'
 import { requireCap, can, settingsOf } from '../auth.js'
 import { sendMail, APP_URL } from '../mail.js'
 import { checkLowStock } from '../stockAlerts.js'
 import { planLimits } from '../plans.js'
 import { scopedProjectIds, inScope } from '../scope.js'
+import { uploader, discardUploads, UPLOADS } from '../uploads.js'
 
 const r = Router()
 
-const UPLOADS = path.resolve('uploads')
-fs.mkdirSync(UPLOADS, { recursive: true })
-const upload = multer({
-  storage: multer.diskStorage({
-    destination: UPLOADS,
-    filename: (_req, file, cb) =>
-      cb(null, Date.now() + '-' + Math.round(Math.random() * 1e6) + path.extname(file.originalname || '.jpg')),
-  }),
-  limits: { fileSize: 50 * 1024 * 1024 },
-})
+const upload = uploader({ files: 12 })
+
+// Phase status is a fixed set. It used to accept any string, which skipped the
+// sign-off checks and later crashed the schedule PDF, whose colour map is
+// indexed by exactly these three values.
+const PHASE_STATUS = ['todo', 'active', 'done']
 
 const dayKey = (d) =>
   `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
 
 // Worker wages from attendance: each clocked-in worker earns their daily rate
-// once per day (first clock-in wins when several phase sessions ran the same
-// day), attributed to that session's phase. The rate is snapshotted on the
+// once per DAY across the whole account (the earliest session of that day wins,
+// whichever project or phase it belongs to). The rate is snapshotted on the
 // record at clock-in; older records fall back to the worker's current rate.
 export async function wagesForProjects(clientId, projectIds) {
+  // Sessions are ALWAYS loaded for the whole account, never just the projects
+  // being displayed, because the de-duplication below has to be global. A
+  // worker earns their daily rate once per DAY, not once per project per day:
+  // keying on project|worker|day paid a worker who moved between two sites
+  // twice, so project spend and the dashboard overstated payroll while the
+  // attendance report (which keys on worker+day) showed the true figure.
+  //
+  // Loading every session also makes attribution stable. The earliest session
+  // of the day wins, so the same worker-day always lands on the same project
+  // whether you are looking at one project or all of them.
   const sessions = await db.attendanceSession.findMany({
-    where: { clientId, ...(projectIds ? { projectId: { in: projectIds } } : {}) },
+    where: { clientId },
     include: { records: { include: { worker: { select: { name: true, type: true, dailyRate: true } } } } },
     orderBy: { id: 'asc' },
   })
-  const seen = new Set() // project|worker|day → already earned that day
+  const wanted = projectIds ? new Set(projectIds) : null
+  const seen = new Set() // worker|day → already earned that day, anywhere
   const byPhase = new Map() // phaseId → Map(day → { amount, workers })
   const unphased = new Map() // projectId → wages of project-wide (no phase) sessions
   for (const s of sessions) {
     const day = dayKey(s.date)
     for (const rec of s.records) {
       if (!rec.worker || !rec.clockInAt) continue // team-member badges earn no wages
-      const key = `${s.projectId}|${rec.workerId}|${day}`
+      const key = `${rec.workerId}|${day}`
       if (seen.has(key)) continue
-      seen.add(key)
+      seen.add(key) // claimed for the day even if it belongs to a project we are not showing
+      if (wanted && !wanted.has(s.projectId)) continue
       const amount = rec.rateSnap ?? rec.worker.dailyRate ?? 0
       if (s.phaseId) {
         const days = byPhase.get(s.phaseId) ?? new Map()
@@ -90,25 +97,30 @@ function derivedPercent(ph) {
   return Math.round(ph.insights.filter(i => i.done).length / ph.insights.length * 100)
 }
 
-function shapePhase(ph, wageDays) {
+// showMoney=false strips every monetary field server-side. The web UI already
+// hid these from roles without stock.amounts, but the API returned them anyway,
+// so a Guest could read every budget straight off the network tab.
+function shapePhase(ph, wageDays, showMoney = true) {
   const { wages, workerDays, labor, materials, spent } = phaseSpent(ph, wageDays)
   const insightMedia = (ph.insights ?? []).flatMap(i => i.media ?? [])
+  const money = (n) => (showMoney ? n : null)
   return {
     id: ph.id, projectId: ph.projectId, name: ph.name, status: ph.status,
     percent: derivedPercent(ph),
-    startDate: ph.startDate, endDate: ph.endDate, budget: ph.budget,
-    costPerBuilder: ph.costPerBuilder, costPerHelper: ph.costPerHelper,
+    startDate: ph.startDate, endDate: ph.endDate, budget: money(ph.budget),
+    costPerBuilder: money(ph.costPerBuilder), costPerHelper: money(ph.costPerHelper),
     assignee: ph.assignee ? { id: ph.assignee.id, name: ph.assignee.name } : null,
     materials: [
-      ...ph.materials.map(m => ({ id: m.id, name: m.nameSnap, qty: m.qty, unitCost: m.unitCostSnap })),
+      ...ph.materials.map(m => ({ id: m.id, name: m.nameSnap, qty: m.qty, unitCost: money(m.unitCostSnap) })),
       ...ph.updates.flatMap(u => (u.materials ?? []).map(m =>
-        ({ id: 'u' + m.id, name: m.nameSnap, qty: m.qty, unitCost: m.unitCostSnap, fromUpdate: true }))),
+        ({ id: 'u' + m.id, name: m.nameSnap, qty: m.qty, unitCost: money(m.unitCostSnap), fromUpdate: true }))),
     ],
     insights: (ph.insights ?? []).map(i => ({
       id: i.id, title: i.title, done: i.done, doneAt: i.doneAt, doneBy: i.doneBy,
       media: (i.media ?? []).map(m => ({ ...m, url: '/uploads/' + m.path })),
     })),
-    wagesSpent: wages, workerDays, laborSpent: labor, materialsSpent: materials, spent,
+    wagesSpent: money(wages), workerDays, laborSpent: money(labor),
+    materialsSpent: money(materials), spent: money(spent),
     hasPhotoProof: ph.updates.some(u => u.media.some(m => m.kind === 'photo')) ||
       insightMedia.some(m => m.kind === 'photo'),
   }
@@ -125,16 +137,49 @@ const PHASE_INCLUDE = {
 // Phase.percent directly stay correct.
 async function syncPhasePercent(phaseId) {
   const insights = await db.keyInsight.findMany({ where: { phaseId } })
-  if (!insights.length) return
-  const percent = Math.round(insights.filter(i => i.done).length / insights.length * 100)
+  // Deleting the last insight used to leave the old percent frozen in place, so
+  // a phase with an empty checklist could keep reading as 100% complete.
+  const percent = insights.length
+    ? Math.round(insights.filter(i => i.done).length / insights.length * 100)
+    : 0
   await db.phase.update({ where: { id: phaseId }, data: { percent } })
 }
 
+// Insight routes reach a phase by insight id. Checking only the client let a
+// user scoped to one project edit another project's checklist - which drives
+// that phase's completion percentage - so the project scope is enforced here.
 async function phaseForInsight(req, insightId) {
-  return db.keyInsight.findFirst({
+  const found = await db.keyInsight.findFirst({
     where: { id: insightId, phase: { project: { clientId: req.client.id } } },
     include: { phase: true },
   })
+  if (!found) return null
+  const ids = await scopedProjectIds(req)
+  return inScope(ids, found.phase.projectId) ? found : null
+}
+
+// Same for reaching a phase directly by id.
+async function phaseInScope(req, phaseId) {
+  const phase = await db.phase.findFirst({
+    where: { id: phaseId, project: { clientId: req.client.id } },
+  })
+  if (!phase) return null
+  const ids = await scopedProjectIds(req)
+  return inScope(ids, phase.projectId) ? phase : null
+}
+
+// A phase assignee must be a member of THIS account. It used to accept any
+// integer, so a senior could attach - and read back the name of - any user on
+// the platform.
+async function resolveAssignee(req) {
+  if (req.body.assigneeId === undefined) return { skip: true }
+  if (!req.body.assigneeId) return { assigneeId: null }
+  const user = await db.user.findFirst({
+    where: { id: +req.body.assigneeId, clientId: req.client.id },
+    select: { id: true },
+  })
+  if (!user) return { error: 'That team member is not part of this account' }
+  return { assigneeId: user.id }
 }
 
 // The project list is also needed by anyone who submits daily reports (the
@@ -162,16 +207,21 @@ r.get('/', (req, res, next) => {
   const looseConsumed = new Map()
   for (const m of looseItems)
     looseConsumed.set(m.update.projectId, (looseConsumed.get(m.update.projectId) ?? 0) + m.qty * m.unitCostSnap)
+  const showMoney = can(req, 'stock.amounts')
   res.json(projects.map(p => {
-    const phases = p.phases.map(ph => shapePhase(ph, byPhase.get(ph.id)))
+    const phases = p.phases.map(ph => shapePhase(ph, byPhase.get(ph.id), showMoney))
     const percent = phases.length ? Math.round(phases.reduce((s, ph) => s + ph.percent, 0) / phases.length) : 0
     // Wages from project-wide attendance sessions (no phase picked) still cost
     // money - they count in the project total even though no phase shows them.
     const unphasedWages = unphased.get(p.id) ?? 0
-    const spent = phases.reduce((s, ph) => s + ph.spent, 0) + unphasedWages + (looseConsumed.get(p.id) ?? 0)
+    const spent = p.phases.reduce((s, ph) => s + phaseSpent(ph, byPhase.get(ph.id)).spent, 0) +
+      unphasedWages + (looseConsumed.get(p.id) ?? 0)
     return {
       id: p.id, name: p.name, location: p.location, status: p.status, currency: p.currency,
-      budget: p.budget, documents: p.documents ?? [], percent, spent, unphasedWages, phases,
+      budget: showMoney ? p.budget : null, documents: p.documents ?? [], percent,
+      spent: showMoney ? spent : null,
+      unphasedWages: showMoney ? unphasedWages : null,
+      phases,
       team: p.members.map(m => ({ id: m.user.id, name: m.user.name, role: m.user.role })),
     }
   }))
@@ -257,7 +307,15 @@ r.delete('/:id', requireCap('projects.create'), async (req, res) => {
     db.stockRequest.deleteMany({ where: { projectId: pid } }),
     db.damagedItem.deleteMany({ where: { projectId: pid } }),
     db.worker.updateMany({ where: { projectId: pid }, data: { projectId: null } }),
-    db.stockItem.updateMany({ where: { projectId: pid }, data: { projectId: null } }),
+    // The project's stores go with it. Transfers referencing them have to clear
+    // first, and items must let go of the store as well as the project -
+    // otherwise the foreign keys block the delete and the project can never be
+    // removed once anyone has created a store on it.
+    db.stockTransfer.deleteMany({
+      where: { OR: [{ fromStore: { projectId: pid } }, { toStore: { projectId: pid } }] },
+    }),
+    db.stockItem.updateMany({ where: { projectId: pid }, data: { projectId: null, storeId: null } }),
+    db.stockStore.deleteMany({ where: { projectId: pid } }),
     db.project.delete({ where: { id: pid } }),
   ])
   await audit(req.client.id, req.user.name, 'project.deleted', project.name)
@@ -268,16 +326,19 @@ r.post('/:id/phases', requireCap('phases.edit'), async (req, res) => {
   const scope = await scopedProjectIds(req)
   const project = await db.project.findFirst({ where: { id: +req.params.id, clientId: req.client.id } })
   if (!project || !inScope(scope, project.id)) return res.status(404).json({ error: 'Project not found' })
-  const { name, budget, costPerBuilder, costPerHelper, startDate, endDate, assigneeId } = req.body
+  const { name, budget, costPerBuilder, costPerHelper, startDate, endDate } = req.body
   if (!name) return res.status(400).json({ error: 'Phase name is required' })
+  const assignee = await resolveAssignee(req)
+  if (assignee.error) return res.status(400).json({ error: assignee.error })
   const count = await db.phase.count({ where: { projectId: project.id } })
   const phase = await db.phase.create({
     data: {
-      projectId: project.id, name, budget: Number(budget) || 0,
-      costPerBuilder: Number(costPerBuilder) || 0, costPerHelper: Number(costPerHelper) || 0,
+      projectId: project.id, name, budget: Math.max(0, Number(budget) || 0),
+      costPerBuilder: Math.max(0, Number(costPerBuilder) || 0),
+      costPerHelper: Math.max(0, Number(costPerHelper) || 0),
       startDate: startDate ? new Date(startDate) : null,
       endDate: endDate ? new Date(endDate) : null,
-      assigneeId: assigneeId ? +assigneeId : null,
+      assigneeId: assignee.skip ? null : assignee.assigneeId,
       orderIdx: count,
     },
   })
@@ -341,10 +402,19 @@ r.patch('/phases/:id', requireCap('phases.edit'), async (req, res) => {
 
   const data = {}
   // Manual percent only applies while a phase has no key insights; otherwise it is derived.
-  if (req.body.percent != null && !phase.insights.length)
-    data.percent = Math.max(0, Math.min(100, +req.body.percent))
-  if (req.body.status) data.status = req.body.status
-  if (req.body.assigneeId !== undefined) data.assigneeId = req.body.assigneeId ? +req.body.assigneeId : null
+  if (req.body.percent != null && !phase.insights.length) {
+    const pct = Number(req.body.percent)
+    if (!Number.isFinite(pct)) return res.status(400).json({ error: 'Percent must be a number' })
+    data.percent = Math.max(0, Math.min(100, Math.round(pct)))
+  }
+  if (req.body.status) {
+    if (!PHASE_STATUS.includes(req.body.status))
+      return res.status(400).json({ error: `Status must be one of: ${PHASE_STATUS.join(', ')}` })
+    data.status = req.body.status
+  }
+  const assignee = await resolveAssignee(req)
+  if (assignee.error) return res.status(400).json({ error: assignee.error })
+  if (!assignee.skip) data.assigneeId = assignee.assigneeId
 
   // Editable details
   if (req.body.name !== undefined && String(req.body.name).trim()) data.name = String(req.body.name).trim()
@@ -418,6 +488,7 @@ r.patch('/phases/:id', requireCap('phases.edit'), async (req, res) => {
 // Delete a phase: drawn materials go back to stock, daily updates keep their
 // history (detached from the phase), insights are removed with it.
 r.delete('/phases/:id', requireCap('phases.edit'), async (req, res) => {
+  if (!(await phaseInScope(req, +req.params.id))) return res.status(404).json({ error: 'Phase not found' })
   const phase = await db.phase.findFirst({
     where: { id: +req.params.id, project: { clientId: req.client.id } },
     include: { materials: true },
@@ -443,9 +514,7 @@ r.delete('/phases/:id', requireCap('phases.edit'), async (req, res) => {
 // ---- Key insights: the checklist that drives phase completion ----
 
 r.post('/phases/:id/insights', requireCap('phases.edit'), async (req, res) => {
-  const phase = await db.phase.findFirst({
-    where: { id: +req.params.id, project: { clientId: req.client.id } },
-  })
+  const phase = await phaseInScope(req, +req.params.id)
   if (!phase) return res.status(404).json({ error: 'Phase not found' })
   const title = (req.body.title ?? '').trim()
   if (!title) return res.status(400).json({ error: 'Insight title is required' })
@@ -476,7 +545,7 @@ r.patch('/insights/:id', requireCap('updates.submit'), async (req, res) => {
 // Attach photo/file proof to an insight.
 r.post('/insights/:id/proof', requireCap('updates.submit'), upload.array('media', 6), async (req, res) => {
   const found = await phaseForInsight(req, +req.params.id)
-  if (!found) return res.status(404).json({ error: 'Insight not found' })
+  if (!found) { discardUploads(req); return res.status(404).json({ error: 'Insight not found' }) }
   const added = (req.files ?? []).map(f => ({
     kind: f.mimetype?.startsWith('video') ? 'video' : f.mimetype?.startsWith('image') ? 'photo' : 'file',
     path: f.filename, name: f.originalname || f.filename,
@@ -499,26 +568,33 @@ r.delete('/insights/:id', requireCap('phases.edit'), async (req, res) => {
 
 // Draw materials from stock into a phase (PRD 4.6: item must exist in stock first).
 r.post('/phases/:id/materials', requireCap('phases.edit'), async (req, res) => {
-  const phase = await db.phase.findFirst({
-    where: { id: +req.params.id, project: { clientId: req.client.id } },
-  })
+  const phase = await phaseInScope(req, +req.params.id)
   if (!phase) return res.status(404).json({ error: 'Phase not found' })
   const { stockItemId, qty } = req.body
   const item = await db.stockItem.findFirst({ where: { id: +stockItemId, clientId: req.client.id } })
   if (!item) return res.status(400).json({ error: 'Item is not in stock - add it to stock first' })
-  const n = Number(qty)
-  if (!n || n <= 0) return res.status(400).json({ error: 'Quantity must be a positive number' })
+  const n = Math.floor(Number(qty))
+  if (!Number.isFinite(n) || n <= 0) return res.status(400).json({ error: 'Quantity must be a positive number' })
   if (item.qty < n) return res.status(400).json({ error: `Only ${item.qty} ${item.unit} in stock` })
 
-  const [material, updatedItem] = await db.$transaction([
-    db.phaseMaterial.create({
+  // The availability check above is advisory - it can go stale between here and
+  // the write. The decrement below only matches rows that still have enough, so
+  // two concurrent draws can never take the quantity negative.
+  const result = await db.$transaction(async (tx) => {
+    const taken = await tx.stockItem.updateMany({
+      where: { id: item.id, qty: { gte: n } },
+      data: { qty: { decrement: n } },
+    })
+    if (!taken.count) return null
+    return tx.phaseMaterial.create({
       data: { phaseId: phase.id, stockItemId: item.id, nameSnap: item.name, qty: n, unitCostSnap: item.unitCost },
-    }),
-    db.stockItem.update({ where: { id: item.id }, data: { qty: { decrement: n } } }),
-  ])
+    })
+  })
+  if (!result) return res.status(409).json({ error: `${item.name} ran out while you were drawing it - refresh and try again` })
+
   await audit(req.client.id, req.user.name, 'phase.material', `${n} ${item.unit} ${item.name} → ${phase.name}`)
-  checkLowStock(req.client, updatedItem, item.qty)
-  res.json(material)
+  checkLowStock(req.client, { ...item, qty: item.qty - n }, item.qty)
+  res.json(result)
 })
 
 // ---- Schedule PDF: the Gantt plan as a downloadable file with letterhead ----
@@ -613,7 +689,9 @@ r.get('/:id/schedule.pdf', requireCap('schedule.view'), async (req, res) => {
           M, ry + 13, { width: LABEL - 12, ellipsis: true, lineBreak: false })
       const x1 = xOf(ph.startDate)
       const x2 = Math.max(x1 + 6, xOf(ph.endDate) + CHART / totalDays)
-      doc.roundedRect(x1, ry + 5, x2 - x1, ROW - 11, 3).fillColor(C[ph.status]).fill()
+      // Defensive: an unrecognised status would hand pdfkit `undefined` and
+      // throw mid-stream, after the PDF headers have already gone out.
+      doc.roundedRect(x1, ry + 5, x2 - x1, ROW - 11, 3).fillColor(C[ph.status] ?? C.todo).fill()
       if (x2 - x1 > 34) {
         doc.font('Helvetica-Bold').fontSize(7).fillColor('#ffffff')
           .text(`${ph.percent}%`, x1, ry + 9, { width: x2 - x1, align: 'center', lineBreak: false })
@@ -869,7 +947,16 @@ r.post('/updates', requireCap('updates.submit'), upload.array('media', 12), asyn
   const { projectId, phaseId, builders, helpers, note, geotag } = req.body
   const scope = await scopedProjectIds(req)
   const project = await db.project.findFirst({ where: { id: +projectId, clientId: req.client.id } })
-  if (!project || !inScope(scope, project.id)) return res.status(400).json({ error: 'Pick a project' })
+  if (!project || !inScope(scope, project.id)) { discardUploads(req); return res.status(400).json({ error: 'Pick a project' }) }
+
+  // The phase was previously trusted as-is. Any id was accepted, including one
+  // belonging to another company - the update then showed up in that company's
+  // phase report, inflating its spend and satisfying its photo-proof gate.
+  let phase = null
+  if (phaseId) {
+    phase = await db.phase.findFirst({ where: { id: +phaseId, projectId: project.id } })
+    if (!phase) { discardUploads(req); return res.status(400).json({ error: 'That phase is not part of this project' }) }
+  }
 
   // Crew on site: [{ type, count }] per worker type. Normally sent by the form
   // (pulled automatically from today's attendance, plus manual additions); if
@@ -889,7 +976,7 @@ r.post('/updates', requireCap('updates.submit'), upload.array('media', 12), asyn
     const sessions = await db.attendanceSession.findMany({
       where: {
         clientId: req.client.id, projectId: project.id, date: { gte: today },
-        ...(phaseId ? { phaseId: +phaseId } : {}),
+        ...(phase ? { phaseId: phase.id } : {}),
       },
       include: { records: { include: { worker: { select: { type: true } } } } },
     })
@@ -915,11 +1002,11 @@ r.post('/updates', requireCap('updates.submit'), upload.array('media', 12), asyn
   // true even if the stock item is edited later.
   let items = []
   if (req.body.items) {
-    try { items = JSON.parse(req.body.items) } catch { return res.status(400).json({ error: 'Bad items payload' }) }
+    try { items = JSON.parse(req.body.items) } catch { discardUploads(req); return res.status(400).json({ error: 'Bad items payload' }) }
   }
   const wanted = new Map() // stockItemId → qty (duplicate rows merged)
   for (const i of Array.isArray(items) ? items : []) {
-    const id = +i.stockItemId, qty = Number(i.qty)
+    const id = +i.stockItemId, qty = Math.floor(Number(i.qty))
     if (id && qty > 0) wanted.set(id, (wanted.get(id) ?? 0) + qty)
   }
   const draws = []
@@ -927,16 +1014,29 @@ r.post('/updates', requireCap('updates.submit'), upload.array('media', 12), asyn
     const item = await db.stockItem.findFirst({
       where: { id: stockItemId, clientId: req.client.id, OR: [{ projectId: null }, { projectId: project.id }] },
     })
-    if (!item) return res.status(400).json({ error: 'An item is not in this project\'s stock - add it to stock first' })
-    if (item.qty < qty) return res.status(400).json({ error: `Only ${item.qty} ${item.unit} of ${item.name} in stock` })
+    if (!item) { discardUploads(req); return res.status(400).json({ error: 'An item is not in this project\'s stock - add it to stock first' }) }
+    if (item.qty < qty) { discardUploads(req); return res.status(400).json({ error: `Only ${item.qty} ${item.unit} of ${item.name} in stock` }) }
     draws.push({ item, qty })
   }
 
   const update = await db.$transaction(async (tx) => {
+    // Same guard as the phase draw: only decrement rows that still hold enough,
+    // so two reports submitted at once cannot push stock negative.
+    for (const d of draws) {
+      const taken = await tx.stockItem.updateMany({
+        where: { id: d.item.id, qty: { gte: d.qty } },
+        data: { qty: { decrement: d.qty } },
+      })
+      if (!taken.count) {
+        const err = new Error(`${d.item.name} ran out while you were submitting - refresh and try again`)
+        err.status = 409
+        throw err
+      }
+    }
     const u = await tx.dailyUpdate.create({
       data: {
         clientId: req.client.id, projectId: project.id,
-        phaseId: phaseId ? +phaseId : null, userId: req.user.id,
+        phaseId: phase?.id ?? null, userId: req.user.id,
         builders: crew.length ? crewBuilders : Number(builders) || 0,
         helpers: crew.length ? crewHelpers : Number(helpers) || 0,
         crew: crew.length ? crew : undefined,
@@ -957,9 +1057,11 @@ r.post('/updates', requireCap('updates.submit'), upload.array('media', 12), asyn
           unitSnap: d.item.unit, qty: d.qty, unitCostSnap: d.item.unitCost,
         },
       })
-      await tx.stockItem.update({ where: { id: d.item.id }, data: { qty: { decrement: d.qty } } })
     }
     return u
+  }).catch((e) => {
+    discardUploads(req)
+    throw e
   })
   // Low-stock alerts for anything this report just consumed
   for (const d of draws)
@@ -1000,8 +1102,14 @@ r.post('/updates', requireCap('updates.submit'), upload.array('media', 12), asyn
 })
 
 r.post('/updates/:id/forward', requireCap('updates.forward'), async (req, res) => {
+  // Updating straight away turned an unknown (or another company's) id into a
+  // 500 rather than a 404.
+  const exists = await db.dailyUpdate.findFirst({
+    where: { id: +req.params.id, clientId: req.client.id }, select: { id: true },
+  })
+  if (!exists) return res.status(404).json({ error: 'Daily report not found' })
   const u = await db.dailyUpdate.update({
-    where: { id: +req.params.id, clientId: req.client.id },
+    where: { id: exists.id },
     data: { forwarded: true },
     include: {
       project: { select: { name: true } },

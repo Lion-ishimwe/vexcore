@@ -6,7 +6,7 @@ import {
 } from 'lucide-react'
 import { api } from '../api.js'
 import { useAuth } from '../auth.jsx'
-import { Lightbox } from '../ui.jsx'
+import { Lightbox, useDialog } from '../ui.jsx'
 
 const SYSTEM_ICON = { Design: DraftingCompass, 'Project Documents': FolderKanban }
 const KIND_META = {
@@ -20,6 +20,7 @@ const fmtCreated = (iso) =>
 
 export default function Documents() {
   const { user, can } = useAuth()
+  const { confirm, prompt } = useDialog()
   const [data, setData] = useState(null)
   const [current, setCurrent] = useState('root')
   const [search, setSearch] = useState('')
@@ -64,19 +65,21 @@ export default function Documents() {
   })
 
   const createFolder = act(async () => {
-    const name = window.prompt('New folder name')
+    const name = await prompt('', '', { title: 'New folder', placeholder: 'Folder name', confirmText: 'Create folder' })
     if (!name?.trim()) return
     await api('/docs/folders', { method: 'POST', body: { name: name.trim() } })
   })
 
   const renameFolder = act(async (f) => {
-    const name = window.prompt('Rename folder', f.name)
+    const name = await prompt('', f.name, { title: `Rename "${f.name}"`, confirmText: 'Rename' })
     if (!name || name === f.name) return
     await api(`/docs/folders/${f.id}`, { method: 'PATCH', body: { name } })
   })
 
   const deleteFolder = act(async (f) => {
-    if (!window.confirm(`Delete folder "${f.name}"?`)) return
+    const ok = await confirm('The folder must be empty - move or delete its documents first.',
+      { title: `Delete folder "${f.name}"?`, confirmText: 'Delete folder', danger: true })
+    if (!ok) return
     await api(`/docs/folders/${f.id}`, { method: 'DELETE' })
   })
 
@@ -84,7 +87,7 @@ export default function Documents() {
     api(`/docs/folders/${f.id}`, { method: 'PATCH', body: { restricted: !f.restricted } }))
 
   const renameDoc = act(async (d) => {
-    const name = window.prompt('Rename document', d.name)
+    const name = await prompt('', d.name, { title: 'Rename document', confirmText: 'Rename' })
     if (!name || name === d.name) return
     await api(`/docs/${d.id}`, { method: 'PATCH', body: { name } })
   })
@@ -93,13 +96,16 @@ export default function Documents() {
     api(`/docs/${d.id}`, { method: 'PATCH', body: { visibility: d.visibility === 'public' ? 'private' : 'public' } }))
 
   const deleteDoc = act(async (d) => {
-    if (!window.confirm(`Delete "${d.name}"?`)) return
+    const ok = await confirm('The file is removed permanently and any link to it stops working.',
+      { title: `Delete "${d.name}"?`, confirmText: 'Delete', danger: true })
+    if (!ok) return
     await api(`/docs/${d.id}`, { method: 'DELETE' })
   })
 
   const openDoc = (d) => {
     if (d.kind === 'image') setLightbox({ url: d.url, name: d.name, download: true })
-    else window.open(d.url, '_blank')
+    // noopener: the opened file must not keep a handle on this window.
+    else window.open(d.url, '_blank', 'noopener,noreferrer')
   }
 
   if (error && !data) return <div className="error-note">{error}</div>

@@ -5,7 +5,7 @@ import {
 } from 'lucide-react'
 import { api, fmtDate, fmtDay } from '../api.js'
 import { useAuth } from '../auth.jsx'
-import { Modal, Field, ErrorNote, Avatar, useForm } from '../ui.jsx'
+import { Modal, Field, ErrorNote, Avatar, useForm, useDialog } from '../ui.jsx'
 
 const ROLE_LABEL = { CLIENT: 'Admin', SENIOR: 'Senior Engineer', SITE: 'Site Engineer', STOCK: 'Stock Manager', GUEST: 'Guest' }
 const ROLE_BADGE = { CLIENT: 'amber', SENIOR: 'blue', SITE: 'gray', STOCK: 'gray', GUEST: 'green' }
@@ -21,6 +21,7 @@ const ORG_LEVELS = [
 
 export default function Team() {
   const { user, client, can } = useAuth()
+  const { confirm } = useDialog()
   const [team, setTeam] = useState(null)
   const [error, setError] = useState(null)
   const [creating, setCreating] = useState(false)
@@ -42,13 +43,20 @@ export default function Team() {
   const load = () => api('/team').then(setTeam).catch((e) => setError(e.message))
   useEffect(() => { load() }, [])
 
+  // busy guards every submit below: on a slow connection the button gave no
+  // feedback, so a second tap created a duplicate account (or sent a second
+  // reset invitation, invalidating the first link the user had already opened).
+  const [busy, setBusy] = useState(false)
+
   const create = async (e) => {
     e.preventDefault(); setFormError(null)
+    if (busy) return
+    setBusy(true)
     try {
       await api('/team', { method: 'POST', body: v })
       setCreating(false); setAll({ name: '', email: '', password: '', role: creatable[0] ?? '' })
       load()
-    } catch (err) { setFormError(err.message) }
+    } catch (err) { setFormError(err.message) } finally { setBusy(false) }
   }
 
   // Owners can reset anyone's password; other roles only those they can create.
@@ -64,17 +72,22 @@ export default function Team() {
 
   const toggleSuspend = async (t) => {
     setMenuFor(null); setActionError(null)
-    if (t.suspended || window.confirm(`Suspend ${t.name}? They will be signed out and unable to log in until reactivated.`)) {
-      try {
-        await api(`/team/${t.id}`, { method: 'PATCH', body: { suspended: !t.suspended } })
-        load()
-      } catch (err) { setActionError(err.message) }
+    if (!t.suspended) {
+      const ok = await confirm('They will be signed out and unable to log in until reactivated.',
+        { title: `Suspend ${t.name}?`, confirmText: 'Suspend', danger: true })
+      if (!ok) return
     }
+    try {
+      await api(`/team/${t.id}`, { method: 'PATCH', body: { suspended: !t.suspended } })
+      load()
+    } catch (err) { setActionError(err.message) }
   }
 
   const removeMember = async (t) => {
     setMenuFor(null); setActionError(null)
-    if (!window.confirm(`Delete ${t.name}'s account permanently? This cannot be undone.`)) return
+    const ok = await confirm('This cannot be undone.',
+      { title: `Delete ${t.name}'s account permanently?`, confirmText: 'Delete account', danger: true })
+    if (!ok) return
     try {
       await api(`/team/${t.id}`, { method: 'DELETE' })
       load()
@@ -91,10 +104,12 @@ export default function Team() {
   // Option 1: email the reset invitation (also returns a copyable link)
   const emailReset = async (send) => {
     setCopied(false)
+    if (busy) return
+    setBusy(true)
     try {
       const r = await api(`/team/${resetFor.member.id}/reset-link`, { method: 'POST', body: { sendEmail: send } })
       setResetFor((s) => ({ ...s, link: `${window.location.origin}/#/login?reset=${r.token}`, emailed: r.emailed, error: null }))
-    } catch (err) { setResetFor((s) => ({ ...s, error: err.message })) }
+    } catch (err) { setResetFor((s) => ({ ...s, error: err.message })) } finally { setBusy(false) }
   }
 
   // Option 2: the admin types the new password - effective immediately
@@ -282,7 +297,9 @@ export default function Team() {
             <Field label="Full name *"><input value={v.name} onChange={set('name')} required autoFocus /></Field>
             <Field label="Email *"><input type="email" value={v.email} onChange={set('email')} required /></Field>
             <Field label="Password * (they can change it later)"><input type="password" value={v.password} onChange={set('password')} required minLength={8} /></Field>
-            <button className="btn" style={{ width: '100%', justifyContent: 'center' }}>Create account</button>
+            <button className="btn" style={{ width: '100%', justifyContent: 'center' }} disabled={busy}>
+              {busy ? 'Creating…' : 'Create account'}
+            </button>
           </form>
         </Modal>
       )}
@@ -327,7 +344,7 @@ export default function Team() {
                 Send <b>{resetFor.member.name}</b> an email invitation to choose their own new
                 password (the link works for 1 hour), or set a new password for them directly below.
               </p>
-              <button className="btn" style={{ width: '100%', justifyContent: 'center' }}
+              <button className="btn" style={{ width: '100%', justifyContent: 'center' }} disabled={busy}
                 onClick={() => emailReset(true)}>
                 <KeyRound size={13} /> Email reset invitation to {resetFor.member.email}
               </button>

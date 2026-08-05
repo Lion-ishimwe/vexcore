@@ -21,10 +21,17 @@ export default function Login() {
   const loc = useLocation()
   // Set when the 30-minute inactivity auto-logout brought the user here.
   const [idleNotice, setIdleNotice] = useState(false)
+  // Set when the session ended because the account was suspended or removed.
+  const [closedNotice, setClosedNotice] = useState(null)
   useEffect(() => {
     if (sessionStorage.getItem('cms_idle_logout') === '1') {
       sessionStorage.removeItem('cms_idle_logout')
       setIdleNotice(true)
+    }
+    const closed = sessionStorage.getItem('cms_closed_reason')
+    if (closed !== null) {
+      sessionStorage.removeItem('cms_closed_reason')
+      setClosedNotice(closed || 'Your session ended - log in to continue.')
     }
   }, [])
 
@@ -146,7 +153,10 @@ export default function Login() {
              'Reset link generated - choose a new password.'}
           </p>
           <ErrorNote error={error} />
-          {idleNotice && mode === 'login' && (
+          {closedNotice && mode === 'login' && (
+            <div className="error-note" style={{ marginBottom: 12 }}>{closedNotice}</div>
+          )}
+          {idleNotice && !closedNotice && mode === 'login' && (
             <div className="ok-note" style={{ marginBottom: 12 }}>
               You were logged out automatically after 30 minutes of inactivity - log in to continue.
             </div>

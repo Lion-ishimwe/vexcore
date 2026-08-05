@@ -6,6 +6,15 @@ import { checkLowStock } from '../stockAlerts.js'
 
 const r = Router()
 
+// Quantities and money are whole, non-negative numbers. `Number(x) || 0` used
+// to let a negative through, which then poisoned stock valuation and the
+// dashboard totals.
+const whole = (v, fallback = 0) => {
+  const n = Math.floor(Number(v))
+  return Number.isFinite(n) && n >= 0 ? n : fallback
+}
+const isNegative = (v) => v !== undefined && Number(v) < 0
+
 // Resolve and validate an optional projectId from the request body:
 // must belong to the client and be inside the caller's project scope.
 async function resolveProject(req, scope) {
@@ -334,6 +343,8 @@ r.post('/', requireCap('stock.edit'), async (req, res) => {
   if (!name) return res.status(400).json({ error: 'Product name is required' })
   if (category === 'Machine' && !serial)
     return res.status(400).json({ error: 'Machines/tools require a serial number' })
+  if ([qty, unitCost, lowThreshold].some(isNegative))
+    return res.status(400).json({ error: 'Quantity, unit cost and threshold cannot be negative' })
   const scope = await scopedProjectIds(req)
   const proj = await resolveProject(req, scope)
   if (proj.error) return res.status(404).json({ error: proj.error })
@@ -356,8 +367,8 @@ r.post('/', requireCap('stock.edit'), async (req, res) => {
       projectId: store.storeId ? store.projectId : proj.projectId,
       storeId: store.storeId,
       name, category: category || 'Consumable',
-      qty: Number(qty) || 0, unit: unit || 'pcs', unitCost: Number(unitCost) || 0,
-      serial: serial || null, lowThreshold: Number(lowThreshold) || 0,
+      qty: whole(qty), unit: unit || 'pcs', unitCost: whole(unitCost),
+      serial: serial || null, lowThreshold: whole(lowThreshold),
     },
   })
   await audit(req.client.id, req.user.name, 'stock.inserted',
@@ -401,11 +412,11 @@ r.post('/bulk', requireCap('stock.edit'), async (req, res) => {
       projectId: store.storeId ? store.projectId : proj.projectId,
       storeId: store.storeId,
       name, category,
-      qty: Number(raw.qty) || 0,
+      qty: whole(raw.qty),
       unit: String(raw.unit ?? '').trim() || 'pcs',
-      unitCost: Number(raw.unitCost) || 0,
+      unitCost: whole(raw.unitCost),
       serial,
-      lowThreshold: Number(raw.lowThreshold) || 0,
+      lowThreshold: whole(raw.lowThreshold),
     })
   }
   if (valid.length) await db.stockItem.createMany({ data: valid })
@@ -424,9 +435,11 @@ r.patch('/:id', requireCap('stock.edit'), async (req, res) => {
     ? managed.includes(item.storeId)
     : !item.projectId || inScope(scope, item.projectId))
   if (!reachable) return res.status(404).json({ error: 'Item not found' })
+  if (['qty', 'unitCost', 'lowThreshold'].some(k => isNegative(req.body[k])))
+    return res.status(400).json({ error: 'Quantity, unit cost and threshold cannot be negative' })
   const data = {}
   for (const k of ['name', 'unit', 'serial']) if (req.body[k] !== undefined) data[k] = req.body[k]
-  for (const k of ['qty', 'unitCost', 'lowThreshold']) if (req.body[k] !== undefined) data[k] = Number(req.body[k]) || 0
+  for (const k of ['qty', 'unitCost', 'lowThreshold']) if (req.body[k] !== undefined) data[k] = whole(req.body[k])
   if (req.body.projectId !== undefined) {
     const proj = await resolveProject(req, scope)
     if (proj.error) return res.status(404).json({ error: proj.error })
@@ -478,7 +491,7 @@ r.post('/issues', requireCap('stock.issue'), async (req, res) => {
   // Validate the items (duplicate rows merged), then deduct in one transaction
   const wanted = new Map()
   for (const i of Array.isArray(req.body.items) ? req.body.items : []) {
-    const id = +i.stockItemId, qty = Number(i.qty)
+    const id = +i.stockItemId, qty = Math.floor(Number(i.qty))
     if (id && qty > 0) wanted.set(id, (wanted.get(id) ?? 0) + qty)
   }
   if (!wanted.size) return res.status(400).json({ error: 'Add at least one item' })
@@ -506,13 +519,25 @@ r.post('/issues', requireCap('stock.issue'), async (req, res) => {
       },
     })
     for (const d of draws) {
+      // Conditional decrement: the availability check above happened outside
+      // the transaction and can be stale, so only take from rows that still
+      // hold enough. Without this two concurrent hand-outs of the same item
+      // both succeed and stock goes negative.
+      const taken = await tx.stockItem.updateMany({
+        where: { id: d.item.id, qty: { gte: d.qty } },
+        data: { qty: { decrement: d.qty } },
+      })
+      if (!taken.count) {
+        const err = new Error(`${d.item.name} ran out while you were issuing it - refresh and try again`)
+        err.status = 409
+        throw err
+      }
       await tx.stockIssueItem.create({
         data: {
           issueId: created.id, stockItemId: d.item.id, nameSnap: d.item.name,
           unitSnap: d.item.unit, qty: d.qty, unitCostSnap: d.item.unitCost,
         },
       })
-      await tx.stockItem.update({ where: { id: d.item.id }, data: { qty: { decrement: d.qty } } })
     }
     return created
   })
@@ -539,26 +564,217 @@ r.get('/issues', requireCap('stock.view'), async (req, res) => {
         ],
       } : {}),
     },
+    include: ISSUE_INCLUDE,
+    orderBy: { createdAt: 'desc' },
+    take: 100,
+  })
+  res.json(issues.map(i => shapeIssue(i, showMoney)))
+})
+
+// ---- Returns: the other half of an issue ----
+// A worker takes 100 bags to the site in the morning and hands the unused ones
+// back in the afternoon. Each hand-back is recorded against the original issue,
+// so the outstanding quantity - what that person still holds - is always known.
+// Good items go back into the store; damaged ones are logged as damaged instead
+// so stock never counts a broken item as usable.
+
+const ISSUE_INCLUDE = {
+  items: true,
+  issuedBy: { select: { name: true } },
+  worker: { select: { id: true, name: true, type: true, photo: true } },
+  user: { select: { id: true, name: true, role: true, photo: true } },
+}
+
+const recipientOf = (i) => (i.worker
+  ? { kind: 'worker', id: i.worker.id, name: i.worker.name, sub: i.worker.type, photo: i.worker.photo ? '/uploads/' + i.worker.photo : null }
+  : { kind: 'user', id: i.user?.id ?? null, name: i.user?.name ?? '-', sub: i.user?.role ?? '', photo: i.user?.photo ? '/uploads/' + i.user.photo : null })
+
+function shapeIssue(i, showMoney) {
+  const items = i.items.map(it => ({
+    id: it.id, stockItemId: it.stockItemId, name: it.nameSnap, qty: it.qty, unit: it.unitSnap,
+    returnedQty: it.returnedQty, outstanding: Math.max(0, it.qty - it.returnedQty),
+    cost: showMoney ? it.qty * it.unitCostSnap : null,
+  }))
+  return {
+    id: i.id, createdAt: i.createdAt, viaCard: i.viaCard, note: i.note,
+    issuedBy: i.issuedBy.name,
+    recipient: recipientOf(i),
+    items,
+    outstanding: items.reduce((s, it) => s + it.outstanding, 0),
+    total: showMoney ? i.items.reduce((s, it) => s + it.qty * it.unitCostSnap, 0) : null,
+  }
+}
+
+// What a person is still holding. Scanning their card on the Returns screen
+// lists exactly what they have not brought back yet.
+r.get('/outstanding/:cardId', requireCap('stock.issue'), async (req, res) => {
+  const found = await personByCard(req.client.id, String(req.params.cardId).trim())
+  if (!found) return res.status(404).json({ error: 'Card not recognised' })
+  const { worker, user } = found
+  const managed = await managedStoreIds(req)
+  const issues = await db.stockIssue.findMany({
+    where: {
+      clientId: req.client.id,
+      ...(worker ? { workerId: worker.id } : { userId: user.id }),
+      // a store-scoped manager only takes back their own store's stock
+      ...(managed ? { items: { some: { stockItem: { storeId: { in: managed } } } } } : {}),
+    },
+    include: ISSUE_INCLUDE,
+    orderBy: { createdAt: 'desc' },
+    take: 50,
+  })
+  const showMoney = can(req, 'stock.amounts')
+  const open = issues.map(i => shapeIssue(i, showMoney)).filter(i => i.outstanding > 0)
+  res.json({
+    person: worker
+      ? { kind: 'worker', name: worker.name, sub: worker.type, photo: worker.photo ? '/uploads/' + worker.photo : null }
+      : { kind: 'user', name: user.name, sub: user.role, photo: user.photo ? '/uploads/' + user.photo : null },
+    issues: open,
+    outstanding: open.reduce((s, i) => s + i.outstanding, 0),
+  })
+})
+
+r.post('/returns', requireCap('stock.issue'), async (req, res) => {
+  const cardId = String(req.body.cardId ?? '').trim()
+  if (!cardId) return res.status(400).json({ error: 'Scan the card\'s QR code or type the card id' })
+  const found = await personByCard(req.client.id, cardId)
+  if (!found) return res.status(404).json({ error: 'Card not recognised' })
+  const { worker, user } = found
+
+  // Merge duplicate rows per issue line, exactly as the issue endpoint does.
+  const wanted = new Map() // issueItemId → { good, damaged }
+  for (const row of Array.isArray(req.body.items) ? req.body.items : []) {
+    const id = +row.issueItemId
+    const qty = Math.floor(Number(row.qty))
+    if (!id || !(qty > 0)) continue
+    const condition = row.condition === 'damaged' ? 'damaged' : 'good'
+    const cell = wanted.get(id) ?? { good: 0, damaged: 0 }
+    cell[condition] += qty
+    wanted.set(id, cell)
+  }
+  if (!wanted.size) return res.status(400).json({ error: 'Enter at least one quantity to return' })
+
+  // Every line must belong to an issue of this account made to THIS person, and
+  // cannot give back more than is still outstanding.
+  const lines = await db.stockIssueItem.findMany({
+    where: { id: { in: [...wanted.keys()] }, issue: { clientId: req.client.id } },
+    include: { issue: { select: { id: true, workerId: true, userId: true } }, stockItem: true },
+  })
+  if (lines.length !== wanted.size) return res.status(404).json({ error: 'One of those hand-outs no longer exists' })
+
+  const issueIds = new Set(lines.map(l => l.issueId))
+  if (issueIds.size !== 1)
+    return res.status(400).json({ error: 'Return the items of one hand-out at a time' })
+  const issueId = [...issueIds][0]
+
+  for (const line of lines) {
+    const belongs = worker ? line.issue.workerId === worker.id : line.issue.userId === user.id
+    if (!belongs) return res.status(403).json({ error: 'Those items were handed out to somebody else' })
+    const { good, damaged } = wanted.get(line.id)
+    const outstanding = line.qty - line.returnedQty
+    if (good + damaged > outstanding)
+      return res.status(400).json({
+        error: `${line.nameSnap}: only ${outstanding} ${line.unitSnap} still out${line.returnedQty ? ` (${line.returnedQty} already returned)` : ''}`,
+      })
+  }
+
+  const note = String(req.body.note ?? '').trim() || null
+  const damagedLog = []
+  const restocked = []
+
+  const created = await db.$transaction(async (tx) => {
+    const ret = await tx.stockReturn.create({
+      data: {
+        clientId: req.client.id, issueId, receivedById: req.user.id,
+        workerId: worker?.id ?? null, userId: user?.id ?? null,
+        viaCard: true, note,
+      },
+    })
+    for (const line of lines) {
+      const { good, damaged } = wanted.get(line.id)
+      for (const [condition, qty] of [['good', good], ['damaged', damaged]]) {
+        if (!qty) continue
+        await tx.stockReturnItem.create({
+          data: {
+            returnId: ret.id, issueItemId: line.id, stockItemId: line.stockItemId,
+            nameSnap: line.nameSnap, unitSnap: line.unitSnap, qty,
+            unitCostSnap: line.unitCostSnap, condition,
+          },
+        })
+      }
+      const total = good + damaged
+      // Guard against two people recording the same hand-back at once: only
+      // advance the line if it still has room for this quantity.
+      const bumped = await tx.stockIssueItem.updateMany({
+        where: { id: line.id, returnedQty: { lte: line.qty - total } },
+        data: { returnedQty: { increment: total } },
+      })
+      if (!bumped.count) {
+        const err = new Error(`${line.nameSnap} was already returned by someone else - refresh and try again`)
+        err.status = 409
+        throw err
+      }
+      if (good) {
+        await tx.stockItem.update({ where: { id: line.stockItemId }, data: { qty: { increment: good } } })
+        restocked.push(`${good} ${line.unitSnap} ${line.nameSnap}`)
+      }
+      if (damaged) {
+        // Damaged goods do NOT go back into the usable quantity - they are
+        // logged so the admin can decide what happens to them.
+        await tx.damagedItem.create({
+          data: {
+            clientId: req.client.id,
+            projectId: line.stockItem?.projectId ?? null,
+            name: line.nameSnap,
+            serial: line.stockItem?.serial ?? null,
+            note: `${damaged} ${line.unitSnap} returned damaged by ${worker?.name ?? user.name}${note ? ` - ${note}` : ''}`,
+          },
+        })
+        damagedLog.push(`${damaged} ${line.unitSnap} ${line.nameSnap}`)
+      }
+    }
+    return ret
+  })
+
+  const person = worker ? `${worker.name} (${worker.type})` : `${user.name} (${user.role})`
+  await audit(req.client.id, req.user.name, 'stock.returned',
+    `${person} returned ${[...restocked, ...damagedLog.map(d => d + ' damaged')].join(', ')}`)
+  res.json({ ok: true, id: created.id, person, restocked, damaged: damagedLog })
+})
+
+r.get('/returns', requireCap('stock.view'), async (req, res) => {
+  const showMoney = can(req, 'stock.amounts')
+  const managed = await managedStoreIds(req)
+  const returns = await db.stockReturn.findMany({
+    where: {
+      clientId: req.client.id,
+      ...(managed ? {
+        OR: [
+          { receivedById: req.user.id },
+          { items: { some: { stockItem: { storeId: { in: managed } } } } },
+        ],
+      } : {}),
+    },
     include: {
       items: true,
-      issuedBy: { select: { name: true } },
+      receivedBy: { select: { name: true } },
       worker: { select: { name: true, type: true, photo: true } },
       user: { select: { name: true, role: true, photo: true } },
     },
     orderBy: { createdAt: 'desc' },
     take: 100,
   })
-  res.json(issues.map(i => ({
-    id: i.id, createdAt: i.createdAt, viaCard: i.viaCard, note: i.note,
-    issuedBy: i.issuedBy.name,
-    recipient: i.worker
-      ? { kind: 'worker', name: i.worker.name, sub: i.worker.type, photo: i.worker.photo ? '/uploads/' + i.worker.photo : null }
-      : { kind: 'user', name: i.user?.name ?? '-', sub: i.user?.role ?? '', photo: i.user?.photo ? '/uploads/' + i.user.photo : null },
-    items: i.items.map(it => ({
-      name: it.nameSnap, qty: it.qty, unit: it.unitSnap,
+  res.json(returns.map(rt => ({
+    id: rt.id, issueId: rt.issueId, createdAt: rt.createdAt, note: rt.note,
+    receivedBy: rt.receivedBy.name,
+    person: recipientOf(rt),
+    items: rt.items.map(it => ({
+      name: it.nameSnap, qty: it.qty, unit: it.unitSnap, condition: it.condition,
       cost: showMoney ? it.qty * it.unitCostSnap : null,
     })),
-    total: showMoney ? i.items.reduce((s, it) => s + it.qty * it.unitCostSnap, 0) : null,
+    returnedQty: rt.items.reduce((s, it) => s + it.qty, 0),
+    damagedQty: rt.items.filter(it => it.condition === 'damaged').reduce((s, it) => s + it.qty, 0),
+    total: showMoney ? rt.items.reduce((s, it) => s + it.qty * it.unitCostSnap, 0) : null,
   })))
 })
 
@@ -570,6 +786,7 @@ r.get('/requests', requireCap('stock.view'), async (req, res) => {
     where: { clientId: req.client.id, ...projectScopeWhere(ids) },
     include: { requestedBy: { select: { name: true } }, project: { select: { name: true } } },
     orderBy: { createdAt: 'desc' },
+    take: 200, // unbounded before: this grows for the life of the account
   })
   res.json(requests.map(q => ({
     id: q.id, itemName: q.itemName, qty: q.qty, note: q.note, status: q.status,
@@ -616,6 +833,7 @@ r.get('/damaged', requireCap('damaged.view'), async (req, res) => {
     where: { clientId: req.client.id, ...projectScopeWhere(ids) },
     include: { project: { select: { name: true } } },
     orderBy: { createdAt: 'desc' },
+    take: 200, // unbounded before
   })
   res.json(damaged.map(d => ({
     id: d.id, name: d.name, serial: d.serial, note: d.note,

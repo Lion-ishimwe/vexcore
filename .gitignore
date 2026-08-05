@@ -58,6 +58,9 @@ prisma/dev.db
 uploads/
 **/uploads/
 
+# Nightly backup output - database dumps contain every record in the system
+backups/
+
 # Package managers
 .pnp.*
 .yarn/*
@@ -71,3 +74,6 @@ uploads/
 .serverless/
 .firebase/
 .expo/
+
+backups
+.claude/

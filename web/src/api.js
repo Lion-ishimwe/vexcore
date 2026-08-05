@@ -6,6 +6,17 @@ export function setToken(t) {
   else localStorage.removeItem('bridge_token')
 }
 
+// Drop every trace of a session: the working token, the Super Admin token
+// parked during support mode (which used to survive logout and sit in
+// localStorage for the next person at that machine), and the server's httpOnly
+// cookie that authenticates image/file requests.
+export function endSession() {
+  setToken(null)
+  localStorage.removeItem('bridge_super_token')
+  // fire-and-forget: the page is usually reloading right after this
+  fetch('/api/auth/logout', { method: 'POST' }).catch(() => {})
+}
+
 export async function api(path, { method = 'GET', body, form } = {}) {
   const headers = {}
   if (token) headers.Authorization = 'Bearer ' + token
@@ -24,18 +35,31 @@ export async function api(path, { method = 'GET', body, form } = {}) {
     // Account-wide 2FA became required while this session was live: drop the
     // token and send the user back to login, where setup is walked through.
     if (res.status === 401 && data?.need2faSetup && token) {
-      setToken(null)
+      endSession()
       window.location.hash = '#/login' // HashRouter route
       window.location.reload()
     }
-    // Token idled past 30 minutes (e.g. browser left closed) → force logout.
+    // Token idled past its window (e.g. browser left closed) → force logout,
+    // saying WHY. Landing on a bare login screen mid-action reads as the app
+    // throwing the user out for no reason.
     if (res.status === 401 && data?.sessionExpired && token) {
-      setToken(null)
+      endSession()
       sessionStorage.setItem('cms_idle_logout', '1')
+      sessionStorage.setItem('cms_closed_reason', data.error ?? '')
+      window.location.hash = '#/login'
+      window.location.reload()
+    }
+    // The account was suspended, deleted or its company closed while the tab
+    // was open. Without this the whole UI stays rendered and every button
+    // fails silently with the same red note.
+    if (res.status === 403 && data?.accountClosed && token) {
+      endSession()
+      sessionStorage.setItem('cms_closed_reason', data.error ?? '')
       window.location.hash = '#/login'
       window.location.reload()
     }
     const err = new Error(data?.error || `Request failed (${res.status})`)
+    err.status = res.status
     err.need2fa = !!data?.need2fa
     err.need2faSetup = !!data?.need2faSetup
     err.setupToken = data?.setupToken ?? null
@@ -61,3 +85,12 @@ export const fmtDate = (d) => {
 
 export const fmtDay = (d) =>
   d ? new Date(d).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' }) : '-'
+
+// A calendar day as YYYY-MM-DD for date inputs and range filters, in the
+// viewer's OWN timezone. toISOString() converts to UTC first, which silently
+// shifts the date by a day for anyone west of UTC - "This month" then started
+// on the 2nd and dropped the 1st from every figure on the page.
+export const dayInput = (d = new Date()) => {
+  const x = new Date(d)
+  return `${x.getFullYear()}-${String(x.getMonth() + 1).padStart(2, '0')}-${String(x.getDate()).padStart(2, '0')}`
+}

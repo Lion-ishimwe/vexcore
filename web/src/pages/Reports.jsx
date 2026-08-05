@@ -4,7 +4,7 @@ import {
   Printer, Download, BarChart3, Users, Package, AlertTriangle,
   CheckCircle2, CalendarDays, Banknote, HardHat,
 } from 'lucide-react'
-import { api, fmtMoney, fmtDay } from '../api.js'
+import { api, fmtMoney, fmtDay, dayInput } from '../api.js'
 import { useAuth } from '../auth.jsx'
 import { Avatar } from '../ui.jsx'
 
@@ -17,7 +17,8 @@ const TABS = [
   ['materials', 'Materials & Stock'],
 ]
 
-const day = (d) => d.toISOString().slice(0, 10)
+// Local calendar day - see dayInput in api.js for why toISOString is wrong here.
+const day = dayInput
 const daysAgo = (n) => { const d = new Date(); d.setDate(d.getDate() - n); return day(d) }
 const PRESETS = [
   ['7', 'Last 7 days'], ['30', 'Last 30 days'], ['90', 'Last 90 days'],
@@ -150,7 +151,9 @@ export default function Reports() {
     if (p === '7') setF((s) => ({ ...s, from: daysAgo(6), to: today }))
     else if (p === '30') setF((s) => ({ ...s, from: daysAgo(29), to: today }))
     else if (p === '90') setF((s) => ({ ...s, from: daysAgo(89), to: today }))
-    else if (p === 'month') { const n = new Date(); setF((s) => ({ ...s, from: day(new Date(n.getFullYear(), n.getMonth(), 2)), to: today })) }
+    // Day 1, not 2: the old value compensated for toISOString shifting the date
+    // back, which only produced the 1st for viewers east of UTC.
+    else if (p === 'month') { const n = new Date(); setF((s) => ({ ...s, from: day(new Date(n.getFullYear(), n.getMonth(), 1)), to: today })) }
     else if (p === 'year') { const n = new Date(); setF((s) => ({ ...s, from: `${n.getFullYear()}-01-01`, to: today })) }
   }
 
@@ -158,7 +161,14 @@ export default function Reports() {
     const q = new URLSearchParams({ from: f.from, to: f.to })
     if (f.projectId) q.set('projectId', f.projectId)
     if (f.phaseId) q.set('phaseId', f.phaseId)
-    api('/reports?' + q).then(setD).catch((e) => setError(e.message))
+    // Editing a date fires a request per keystroke; without sequencing a slow
+    // response for a half-typed range can land last and paint numbers that do
+    // not match the filter bar above them.
+    let live = true
+    api('/reports?' + q)
+      .then((r) => { if (live) { setD(r); setError(null) } })
+      .catch((e) => { if (live) setError(e.message) })
+    return () => { live = false }
   }, [f])
 
   const phaseOptions = useMemo(() =>

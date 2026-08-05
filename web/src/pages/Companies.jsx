@@ -1,10 +1,10 @@
 import { useEffect, useState } from 'react'
 import {
   Search, LayoutGrid, List, Download, MoreHorizontal, Wrench, PauseCircle,
-  PlayCircle, XCircle, Building2,
+  PlayCircle, XCircle, Building2, Trash2, AlertTriangle,
 } from 'lucide-react'
 import { api, setToken, fmtDay } from '../api.js'
-import { Avatar, ErrorNote } from '../ui.jsx'
+import { Avatar, ErrorNote, Modal, Field } from '../ui.jsx'
 
 const STATUS_BADGE = { TRIAL: 'amber', ACTIVE: 'green', SUSPENDED: 'red', TERMINATED: 'gray' }
 
@@ -44,6 +44,33 @@ export default function Companies() {
     setMenuFor(null); setError(null)
     try { await api(`/admin/clients/${id}`, { method: 'PATCH', body: { status } }); load() }
     catch (err) { setError(err.message) }
+  }
+
+  // ---- Permanent deletion ----
+  // No undo and no soft-delete, so this is deliberately harder than a click:
+  // the exact company name has to be typed back, the same way the server
+  // re-checks it. Suspending is the reversible option and stays one click.
+  const [deleting, setDeleting] = useState(null) // the company being deleted
+  const [typed, setTyped] = useState('')
+  const [delErr, setDelErr] = useState(null)
+  const [delBusy, setDelBusy] = useState(false)
+  const [deleted, setDeleted] = useState(null) // summary of what went
+
+  const openDelete = (c) => {
+    setMenuFor(null); setError(null)
+    setDeleting(c); setTyped(''); setDelErr(null); setDeleted(null)
+  }
+
+  const confirmDelete = async (e) => {
+    e.preventDefault()
+    if (delBusy || typed.trim() !== deleting.company) return
+    setDelBusy(true); setDelErr(null)
+    try {
+      const r = await api(`/admin/clients/${deleting.id}`, { method: 'DELETE', body: { confirm: typed.trim() } })
+      setDeleting(null)
+      setDeleted(r)
+      load()
+    } catch (err) { setDelErr(err.message) } finally { setDelBusy(false) }
   }
 
   // Open the company's workspace as its admin (support mode). The super token
@@ -125,6 +152,9 @@ export default function Companies() {
                       {c.status !== 'SUSPENDED' && c.status !== 'TERMINATED' &&
                         <button onClick={() => setStatus(c.id, 'SUSPENDED')}><PauseCircle size={13} /> Suspend</button>}
                       {c.status === 'SUSPENDED' && <button onClick={() => setStatus(c.id, 'TERMINATED')}><XCircle size={13} /> Terminate</button>}
+                      <button className="danger" onClick={() => openDelete(c)}>
+                        <Trash2 size={13} /> Delete permanently
+                      </button>
                     </div>
                   </>
                 )}
@@ -175,6 +205,61 @@ export default function Companies() {
         <Building2 size={12} /> Clicking a company opens its workspace in support mode - you act as its
         admin with full access to every feature and setting, and your visit is recorded in the company's audit trail.
       </p>
+
+      {deleting && (
+        <Modal title={`Delete "${deleting.company}" permanently`} onClose={() => setDeleting(null)}>
+          <ErrorNote error={delErr} />
+          <div className="error-note" style={{ display: 'flex', gap: 10, alignItems: 'flex-start', marginBottom: 14 }}>
+            <AlertTriangle size={18} style={{ flex: 'none', marginTop: 1 }} />
+            <div>
+              <b>This cannot be undone.</b> Everything belonging to this company is erased:
+              its {deleting.users} user account{deleting.users === 1 ? '' : 's'} and {deleting.projects} project
+              {deleting.projects === 1 ? '' : 's'}, plus every phase, daily report, photo, document,
+              attendance record, worker, stock item, message and payment record.
+              Uploaded files are deleted from disk too.
+            </div>
+          </div>
+          <p className="small muted" style={{ marginTop: 0 }}>
+            Looking to stop access without losing the data? Close this and use <b>Suspend</b> instead -
+            that is reversible.
+          </p>
+          <form onSubmit={confirmDelete}>
+            <Field label={`Type the company name to confirm`}>
+              <input value={typed} autoFocus autoComplete="off" placeholder={deleting.company}
+                onChange={(e) => setTyped(e.target.value)} />
+            </Field>
+            <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
+              <button type="button" className="btn ghost" onClick={() => setDeleting(null)}>Cancel</button>
+              <button className="btn danger" disabled={delBusy || typed.trim() !== deleting.company}>
+                {delBusy ? 'Deleting…' : 'Delete this company for ever'}
+              </button>
+            </div>
+          </form>
+        </Modal>
+      )}
+
+      {deleted && (
+        <Modal title="Company deleted" onClose={() => setDeleted(null)}>
+          <div className="ok-note" style={{ marginBottom: 12 }}>
+            <b>{deleted.company}</b> and all of its data have been permanently removed.
+          </div>
+          <table style={{ width: '100%' }}>
+            <tbody>
+              {Object.entries(deleted.counts ?? {}).filter(([, n]) => n > 0).map(([k, n]) => (
+                <tr key={k}>
+                  <td className="muted small" style={{ textTransform: 'capitalize' }}>{k.replace(/([A-Z])/g, ' $1')}</td>
+                  <td className="small" style={{ textAlign: 'right' }}><b>{n.toLocaleString()}</b></td>
+                </tr>
+              ))}
+              {deleted.files > 0 && (
+                <tr><td className="muted small">Uploaded files</td><td className="small" style={{ textAlign: 'right' }}><b>{deleted.files}</b></td></tr>
+              )}
+            </tbody>
+          </table>
+          <p className="small muted">A record of this deletion is kept on the platform.</p>
+          <button className="btn" style={{ width: '100%', justifyContent: 'center' }} onClick={() => setDeleted(null)}>Close</button>
+        </Modal>
+      )}
     </>
   )
 }

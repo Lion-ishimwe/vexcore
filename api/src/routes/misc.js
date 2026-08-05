@@ -1,27 +1,41 @@
 import { Router } from 'express'
-import multer from 'multer'
-import path from 'node:path'
-import fs from 'node:fs'
 import { db, audit } from '../db.js'
-import { requireCap, can, settingsOf, capsFor, DEFAULT_SETTINGS } from '../auth.js'
+import { requireCap, can, settingsOf, capsFor, DEFAULT_SETTINGS, requireClient } from '../auth.js'
 import { PLANS } from '../plans.js'
 import { scopedProjectIds, projectScopeWhere, inScope } from '../scope.js'
 import { ensureSystemFolders } from './docs.js'
 import { wagesForProjects } from './projects.js'
 import { photoUpload } from './account.js'
+import { uploader, discardUploads, removeStoredFile } from '../uploads.js'
+import { deleteClientCascade } from '../deleteClient.js'
 
 const r = Router()
 
-const UPLOADS = path.resolve('uploads')
-fs.mkdirSync(UPLOADS, { recursive: true })
-const upload = multer({
-  storage: multer.diskStorage({
-    destination: UPLOADS,
-    filename: (_req, file, cb) =>
-      cb(null, Date.now() + '-' + Math.round(Math.random() * 1e6) + path.extname(file.originalname || '.bin')),
-  }),
-  limits: { fileSize: 50 * 1024 * 1024 },
+// This router serves both the company workspace (/dashboard, /settings, /chat…)
+// and the Super Admin platform panel (/admin/*). Only the former needs a
+// company in context; without this a Super Admin hit `req.client.id` and got a
+// 500 from every workspace route.
+r.use((req, res, next) => {
+  if (req.path.startsWith('/admin')) return next()
+  return requireClient(req, res, next)
 })
+
+const upload = uploader({ files: 8 })
+
+// A date coming off a query string can be anything; an Invalid Date handed to
+// Prisma is a 500, so callers get a clear 400 instead.
+const DAY_RE = /^\d{4}-\d{2}-\d{2}$/
+export function badDates(req, res) {
+  for (const k of ['from', 'to']) {
+    const v = req.query[k]
+    if (!v) continue
+    if (!DAY_RE.test(String(v)) || isNaN(new Date(String(v) + 'T00:00:00').getTime())) {
+      res.status(400).json({ error: 'Bad date - use YYYY-MM-DD' })
+      return true
+    }
+  }
+  return false
+}
 
 // ---- Chat ----
 
@@ -44,18 +58,25 @@ function attachmentKind(mimetype = '') {
 }
 
 // ?to=all → company channel; ?to=<userId> → private DM thread between me and them
+// ?before=<id> pages further back through the history.
 r.get('/messages', requireCap('chat'), async (req, res) => {
   const to = req.query.to
   const me = req.user.id
   const convo = !to || to === 'all'
     ? { recipientId: null }
     : { OR: [{ userId: me, recipientId: +to }, { userId: +to, recipientId: me }] }
-  const messages = await db.message.findMany({
-    where: { clientId: req.client.id, ...convo },
+  const before = +req.query.before || null
+  // Ordering ascending with take:100 returned the OLDEST hundred messages ever
+  // written, so every conversation froze once it passed a hundred. Take the
+  // NEWEST hundred and flip them back into reading order.
+  const page = await db.message.findMany({
+    where: { clientId: req.client.id, ...convo, ...(before ? { id: { lt: before } } : {}) },
     include: { user: { select: { name: true, role: true, photo: true } } },
-    orderBy: { createdAt: 'asc' },
+    orderBy: { id: 'desc' },
     take: 100,
   })
+  const messages = page.reverse()
+  res.setHeader('x-has-more', page.length === 100 ? '1' : '0')
   res.json(messages.map(m => ({
     id: m.id, from: m.user.name, role: m.user.role, text: m.text, createdAt: m.createdAt,
     fromPhoto: m.user.photo ? '/uploads/' + m.user.photo : null,
@@ -118,7 +139,7 @@ r.post('/messages', requireCap('chat'), upload.array('files', 8), async (req, re
     try { invited = JSON.parse(req.body.invited ?? '[]').map(Number).filter(Boolean) } catch { /* ignore bad json */ }
     attachments.push({ kind: 'call', room: String(req.body.callRoom), invited })
   }
-  if (!text && !attachments.length) return res.status(400).json({ error: 'Empty message' })
+  if (!text && !attachments.length) { discardUploads(req); return res.status(400).json({ error: 'Empty message' }) }
 
   // Private message: recipient must be a member of the same company.
   let recipientId = null
@@ -126,7 +147,7 @@ r.post('/messages', requireCap('chat'), upload.array('files', 8), async (req, re
     const recipient = await db.user.findFirst({
       where: { id: +req.body.recipientId, clientId: req.client.id },
     })
-    if (!recipient) return res.status(400).json({ error: 'Recipient is not in your company' })
+    if (!recipient) { discardUploads(req); return res.status(400).json({ error: 'Recipient is not in your company' }) }
     recipientId = recipient.id
   }
 
@@ -383,6 +404,7 @@ r.get('/reports', requireCap('reports'), async (req, res) => {
   const pFilter = +req.query.projectId || null
   const phFilter = +req.query.phaseId || null
   if (pFilter && !inScope(ids, pFilter)) return res.status(404).json({ error: 'Project not found' })
+  if (badDates(req, res)) return
   const from = req.query.from
     ? new Date(req.query.from + 'T00:00:00')
     : (() => { const d = new Date(); d.setHours(0, 0, 0, 0); d.setDate(d.getDate() - 29); return d })()
@@ -409,8 +431,11 @@ r.get('/reports', requireCap('reports'), async (req, res) => {
       },
       orderBy: [{ projectId: 'asc' }, { orderIdx: 'asc' }],
     }),
+    // Whole account, not just the filtered projects: the wage de-duplication
+    // below is per worker per DAY across every site, so it has to see sessions
+    // outside the current filter to know whether a day is already claimed.
     db.attendanceSession.findMany({
-      where: { clientId: cid, projectId: { in: projIds } },
+      where: { clientId: cid },
       include: { records: { include: { worker: { select: { id: true, name: true, type: true, dailyRate: true, photo: true } } } } },
       orderBy: { id: 'asc' },
     }),
@@ -429,7 +454,11 @@ r.get('/reports', requireCap('reports'), async (req, res) => {
     }),
   ])
 
-  // ---- Wages: one pass, first-clock-in-wins per worker/project/day ----
+  // ---- Wages: one pass, earliest-session-wins per worker/DAY ----
+  // A worker earns their daily rate once a day, not once per project per day -
+  // keying this on the project too paid someone who moved between two sites
+  // twice, which is why project spend used to exceed the attendance payroll.
+  const inScopeProject = new Set(projIds)
   const seen = new Set()
   const phaseWageDays = new Map()   // phaseId → Map(day → amount) (lifetime)
   const unphasedByProject = new Map() // projectId → lifetime unphased wages
@@ -440,9 +469,10 @@ r.get('/reports', requireCap('reports'), async (req, res) => {
     const day = dayKey(s.date)
     for (const rec of s.records) {
       if (!rec.worker || !rec.clockInAt) continue // team-member badges earn no wages
-      const key = `${s.projectId}|${rec.workerId}|${day}`
+      const key = `${rec.workerId}|${day}`
       if (seen.has(key)) continue
-      seen.add(key)
+      seen.add(key) // the day is claimed even if this session's project is filtered out
+      if (!inScopeProject.has(s.projectId)) continue
       const amt = rec.rateSnap ?? rec.worker.dailyRate ?? 0
       if (s.phaseId) {
         const m = phaseWageDays.get(s.phaseId) ?? new Map()
@@ -657,13 +687,18 @@ r.get('/audit', requireCap('audit.view'), async (req, res) => {
 
 // ---- Settings ----
 
+// Company profile + branding is needed by anyone (headers, letterheads), but
+// the access-control toggles map out the account's security posture, so only
+// roles that can actually edit settings see them.
 r.get('/settings', (req, res) => {
-  res.json({
-    settings: settingsOf(req.client), currency: req.client.currency,
+  const base = {
+    currency: req.client.currency,
     company: req.client.company, tin: req.client.tin, location: req.client.location,
     contact: req.client.contact, country: req.client.country,
     logo: req.client.logo ? '/uploads/' + req.client.logo : null,
-  })
+  }
+  if (!can(req, 'settings.edit')) return res.json(base)
+  res.json({ ...base, settings: settingsOf(req.client) })
 })
 
 // ---- Branding: the company logo used on everything printed (schedule PDF /
@@ -671,13 +706,16 @@ r.get('/settings', (req, res) => {
 
 r.post('/settings/logo', requireCap('settings.edit'), photoUpload.single('logo'), async (req, res) => {
   if (!req.file) return res.status(400).json({ error: 'Pick an image file (PNG or JPG)' })
+  const previous = req.client.logo
   await db.client.update({ where: { id: req.client.id }, data: { logo: req.file.filename } })
+  removeStoredFile(previous)
   await audit(req.client.id, req.user.name, 'branding.logo', 'Company logo updated')
   res.json({ logo: '/uploads/' + req.file.filename })
 })
 
 r.delete('/settings/logo', requireCap('settings.edit'), async (req, res) => {
   await db.client.update({ where: { id: req.client.id }, data: { logo: null } })
+  removeStoredFile(req.client.logo)
   await audit(req.client.id, req.user.name, 'branding.logo', 'Company logo removed - platform default applies')
   res.json({ logo: null })
 })
@@ -756,6 +794,7 @@ r.post('/admin/demo-alerts/seen', superOnly, async (req, res) => {
 const DEMO_STATUSES = ['SCHEDULED', 'DONE', 'NO_SHOW', 'CANCELED']
 
 r.get('/admin/demos', superOnly, async (req, res) => {
+  if (badDates(req, res)) return
   const where = {}
   if (DEMO_STATUSES.includes(req.query.status)) where.status = req.query.status
   if (req.query.from) where.slot = { ...(where.slot ?? {}), gte: new Date(req.query.from + 'T00:00:00') }
@@ -800,6 +839,7 @@ r.patch('/admin/demos/:id', superOnly, async (req, res) => {
 // ---- Platform audit trail: everything that happened, across ALL companies.
 // Audit is Super-Admin-only - client roles have no audit capability.
 r.get('/admin/audit', superOnly, async (req, res) => {
+  if (badDates(req, res)) return
   const where = {}
   if (+req.query.clientId) where.clientId = +req.query.clientId
   if (req.query.from) where.createdAt = { ...(where.createdAt ?? {}), gte: new Date(req.query.from + 'T00:00:00') }
@@ -935,6 +975,39 @@ r.get('/admin/clients', superOnly, async (_req, res) => {
   })))
 })
 
+// Permanently delete a company and everything in it. There is no undo and no
+// soft-delete: suspending (PATCH status) is the reversible option, and this is
+// deliberately the other one - for closed accounts, test tenants, and data the
+// customer has asked to have erased.
+//
+// Guards: Super Admin only, never from inside a support session (you would be
+// deleting the workspace you are standing in), and the exact company name has
+// to be typed back so a misclick in a list cannot destroy a tenant.
+r.delete('/admin/clients/:id', superOnly, async (req, res) => {
+  if (req.impersonating)
+    return res.status(403).json({ error: 'Leave support mode before deleting a company' })
+
+  const client = await db.client.findUnique({ where: { id: +req.params.id } })
+  if (!client) return res.status(404).json({ error: 'Company not found' })
+
+  const typed = String(req.body?.confirm ?? '').trim()
+  if (typed !== client.company)
+    return res.status(400).json({
+      error: `Type the company name exactly ("${client.company}") to confirm permanent deletion`,
+    })
+
+  const result = await deleteClientCascade(client.id, { deletedBy: req.user.name })
+  console.warn(`[cms] company permanently deleted: "${result.company}" (id ${client.id}) by ${req.user.name} - ${JSON.stringify(result.counts)}`)
+  res.json({ ok: true, ...result })
+})
+
+// The platform's record of permanently deleted companies - the only trace left,
+// since a company's own audit rows go with it.
+r.get('/admin/deleted-clients', superOnly, async (_req, res) => {
+  const rows = await db.deletedClient.findMany({ orderBy: { createdAt: 'desc' }, take: 200 })
+  res.json(rows)
+})
+
 // Manual MoMo payment queue: clients report payments; the Super Admin matches
 // them against the MoMo account statement and confirms or rejects here.
 r.get('/admin/payments', superOnly, async (_req, res) => {
@@ -963,7 +1036,17 @@ r.patch('/admin/payments/:id', superOnly, async (req, res) => {
   // Extend from the current coverage end if still in the future, else from now.
   const base = payment.client.paidUntil && new Date(payment.client.paidUntil) > new Date()
     ? new Date(payment.client.paidUntil) : new Date()
-  const paidUntil = new Date(base.getTime() + payment.months * 30 * 86400000)
+  // Calendar months, not 30-day blocks: 12 × 30 days is 360, so a customer
+  // paying yearly lost about five days of coverage every year. setMonth also
+  // handles the short-month case (31 Jan + 1 month → 3 March would be wrong,
+  // so it is clamped back to the last day of February).
+  const paidUntil = new Date(base)
+  const targetMonth = paidUntil.getMonth() + payment.months
+  const dayOfMonth = paidUntil.getDate()
+  paidUntil.setDate(1)
+  paidUntil.setMonth(targetMonth)
+  const lastDay = new Date(paidUntil.getFullYear(), paidUntil.getMonth() + 1, 0).getDate()
+  paidUntil.setDate(Math.min(dayOfMonth, lastDay))
   await db.$transaction([
     db.payment.update({
       where: { id: payment.id },

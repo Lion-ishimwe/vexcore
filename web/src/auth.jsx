@@ -1,5 +1,5 @@
 import { createContext, useContext, useEffect, useState } from 'react'
-import { api, setToken } from './api.js'
+import { api, setToken, endSession } from './api.js'
 
 const AuthCtx = createContext(null)
 export const useAuth = () => useContext(AuthCtx)
@@ -12,12 +12,18 @@ export function AuthProvider({ children }) {
     if (!localStorage.getItem('bridge_token')) { setLoading(false); return }
     api('/auth/me')
       .then((s) => setSession(s))
-      .catch(() => setToken(null))
+      .catch((e) => {
+        // Only throw the token away when the server actually rejected it.
+        // Treating a 500 or a dropped connection as "logged out" signed site
+        // engineers out whenever their signal dipped at app start; api() has
+        // already cleared the session for the auth failures that warrant it.
+        if (e?.status && e.status >= 400 && e.status < 500) setToken(null)
+      })
       .finally(() => setLoading(false))
   }, [])
 
   const login = (s) => { setToken(s.token); setSession(s) }
-  const logout = () => { setToken(null); setSession(null) }
+  const logout = () => { endSession(); setSession(null) }
   // Re-pull the session (e.g. after a payment is confirmed, so locks lift live)
   const refresh = () => api('/auth/me').then((s) => setSession(s)).catch(() => {})
   const updateClient = (patch) => setSession((s) => ({ ...s, client: { ...s.client, ...patch } }))

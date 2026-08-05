@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { Wallet, Clock3, Download, Search, Hourglass } from 'lucide-react'
 import { api, fmtDay, fmtMoney } from '../api.js'
-import { ErrorNote } from '../ui.jsx'
+import { ErrorNote, useDialog } from '../ui.jsx'
 
 const PAY_BADGE = { PENDING: 'amber', CONFIRMED: 'green', REJECTED: 'red', CANCELED: 'gray' }
 const STATUSES = ['PENDING', 'CONFIRMED', 'REJECTED', 'CANCELED']
@@ -9,6 +9,7 @@ const STATUSES = ['PENDING', 'CONFIRMED', 'REJECTED', 'CANCELED']
 const STARTER_PRICE = 30000
 
 export default function Payments() {
+  const { confirm } = useDialog()
   const [payments, setPayments] = useState(null)
   const [clients, setClients] = useState([])
   const [error, setError] = useState(null)
@@ -23,7 +24,11 @@ export default function Payments() {
 
   const decide = async (id, action) => {
     setError(null)
-    if (action === 'reject' && !window.confirm('Reject this payment? The company keeps its current status.')) return
+    if (action === 'reject') {
+      const ok = await confirm('The company keeps its current status and is not credited.',
+        { title: 'Reject this payment?', confirmText: 'Reject payment', danger: true })
+      if (!ok) return
+    }
     try { await api(`/admin/payments/${id}`, { method: 'PATCH', body: { action } }); load() }
     catch (err) { setError(err.message) }
   }

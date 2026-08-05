@@ -2,7 +2,20 @@ import jwt from 'jsonwebtoken'
 import { db } from './db.js'
 import { subscriptionOf } from './plans.js'
 
-const SECRET = process.env.JWT_SECRET || 'dev'
+// No fallback secret. A missing JWT_SECRET used to silently become the string
+// 'dev', which makes every session token on the deployment forgeable - refuse
+// to start instead, so the mistake is loud at boot rather than silent forever.
+const SECRET = process.env.JWT_SECRET
+if (!SECRET || SECRET.length < 32) {
+  console.error(
+    '\nFATAL: JWT_SECRET is ' + (SECRET ? 'too short' : 'not set') + '.\n' +
+    'Set it to at least 32 random characters before starting the API, e.g.\n' +
+    "  node -e \"console.log(require('crypto').randomBytes(48).toString('base64url'))\"\n")
+  process.exit(1)
+}
+// Pin the algorithm on every verify: without it the library will honour
+// whatever alg the token itself declares.
+const JWT_OPTS = { algorithms: ['HS256'] }
 
 export const DEFAULT_SETTINGS = {
   stockVisibleToSite: true,
@@ -90,6 +103,10 @@ export function capsFor(user, client) {
   if (s.mediaDownload) caps.add('media.download')
   // Guest areas are opt-in/out individually (Settings → Guest access).
   if (user.role === 'GUEST') {
+    // The master switch used to be declared but never read, so an admin who
+    // turned guest access OFF still left guests with the dashboard, projects
+    // and documents - they believed they had revoked access and had not.
+    if (!s.guestAccess) return []
     if (!s.guestPhases) caps.delete('phases.view')
     if (!s.guestUpdates) caps.delete('updates.view')
     if (!s.guestSchedule) caps.delete('schedule.view')
@@ -115,8 +132,11 @@ export function sign(user) {
 // Support mode: the Super Admin opens a company's workspace acting as its
 // admin. The token carries who they really are (uid) and which client they
 // act inside (actAs).
+// Deliberately short-lived: this token bypasses suspension, 2FA and
+// subscription gates, cannot be revoked server-side, and a leaked one is full
+// admin of that tenant until it expires. Eight hours was a whole working day.
 export function signImpersonation(user, client) {
-  return jwt.sign({ uid: user.id, actAs: client.id }, SECRET, { expiresIn: '8h' })
+  return jwt.sign({ uid: user.id, actAs: client.id }, SECRET, { expiresIn: '60m' })
 }
 
 // Short-lived token that only allows completing 2FA setup during login
@@ -127,12 +147,81 @@ export function signSetupToken(user) {
 
 export function verifySetupToken(token) {
   try {
-    const payload = jwt.verify(token ?? '', SECRET)
+    const payload = jwt.verify(token ?? '', SECRET, JWT_OPTS)
     return payload.scope === '2fa-setup' ? payload : null
   } catch {
     return null
   }
 }
+
+// ---- Session cookie ----
+// The token lives in localStorage for API calls, but <img src="/uploads/...">
+// cannot send an Authorization header, so the same token is mirrored into an
+// httpOnly cookie that the uploads route reads. httpOnly means script cannot
+// read it back out, so this does not widen the XSS surface.
+const COOKIE = 'bridge_session'
+const secureCookies = (process.env.APP_URL || '').startsWith('https://')
+
+export function setSessionCookie(res, token) {
+  res.append('Set-Cookie', [
+    `${COOKIE}=${token}`,
+    'Path=/',
+    'HttpOnly',
+    'SameSite=Lax',
+    `Max-Age=${SESSION_MINUTES * 60}`,
+    ...(secureCookies ? ['Secure'] : []),
+  ].join('; '))
+}
+
+export function clearSessionCookie(res) {
+  res.append('Set-Cookie', `${COOKIE}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0`)
+}
+
+export function readCookie(req, name) {
+  const raw = req.headers.cookie
+  if (!raw) return null
+  for (const part of raw.split(';')) {
+    const eq = part.indexOf('=')
+    if (eq === -1) continue
+    if (part.slice(0, eq).trim() === name) return part.slice(eq + 1).trim()
+  }
+  return null
+}
+
+// Resolve a token to its user without the full request gating in authRequired -
+// used by the uploads route, which needs identity but not subscription locks.
+export async function userFromToken(token) {
+  if (!token) return null
+  let payload
+  try {
+    payload = jwt.verify(token, SECRET, JWT_OPTS)
+  } catch {
+    return null
+  }
+  if (payload.scope) return null
+  const user = await db.user.findUnique({ where: { id: payload.uid } })
+  if (!user) return null
+  if (sessionRevoked(user, payload)) return null
+  if (payload.actAs) {
+    if (user.role !== 'SUPER') return null
+    return { user, clientId: payload.actAs }
+  }
+  if (user.role !== 'SUPER' && user.suspended) return null
+  return { user, clientId: user.clientId }
+}
+
+// Tokens minted before the account's last password change are dead, so a
+// stolen session cannot outlive the password it was obtained with.
+function sessionRevoked(user, payload) {
+  if (!user.sessionsValidFrom || !payload.iat) return false
+  return payload.iat * 1000 < new Date(user.sessionsValidFrom).getTime()
+}
+
+// The cut-off to store in sessionsValidFrom. JWT `iat` has whole-second
+// resolution, so this is floored to the same second - otherwise the very token
+// issued alongside the change would compare as older than the cut-off and be
+// rejected immediately.
+export const revocationStamp = () => new Date(Math.floor(Date.now() / 1000) * 1000)
 
 export async function authRequired(req, res, next) {
   const header = req.headers.authorization || ''
@@ -140,14 +229,19 @@ export async function authRequired(req, res, next) {
   if (!token) return res.status(401).json({ error: 'Not authenticated' })
   let payload
   try {
-    payload = jwt.verify(token, SECRET)
+    payload = jwt.verify(token, SECRET, JWT_OPTS)
   } catch {
+    clearSessionCookie(res)
     return res.status(401).json({ error: 'Session expired - log in again', sessionExpired: true })
   }
   // Scoped tokens (e.g. 2FA setup) are not full sessions.
   if (payload.scope) return res.status(401).json({ error: 'Not authenticated' })
   const user = await db.user.findUnique({ where: { id: payload.uid }, include: { client: true } })
-  if (!user) return res.status(401).json({ error: 'Account not found' })
+  if (!user) return res.status(401).json({ error: 'Account not found', sessionExpired: true })
+  if (sessionRevoked(user, payload)) {
+    clearSessionCookie(res)
+    return res.status(401).json({ error: 'Your password was changed - log in again', sessionExpired: true })
+  }
   // Support mode: Super Admin acting as a company's admin. Status/2FA/expiry
   // gates are skipped on purpose - support must reach locked accounts too.
   if (payload.actAs) {
@@ -157,14 +251,27 @@ export async function authRequired(req, res, next) {
     req.user = { ...user, role: 'CLIENT', clientId: client.id }
     req.client = client
     req.impersonating = true
+    // Support sessions slide like normal ones. Without this the token was a
+    // hard deadline from the moment support mode opened: it expired mid-action
+    // however busy the operator was, and the client turned that into a forced
+    // logout rather than a renewal.
+    if (payload.iat && Date.now() / 1000 - payload.iat > 60) {
+      const fresh = signImpersonation(user, client)
+      res.setHeader('x-refresh-token', fresh)
+      setSessionCookie(res, fresh)
+    } else if (readCookie(req, COOKIE) !== token) {
+      setSessionCookie(res, token)
+    }
     return next()
   }
   if (user.role !== 'SUPER') {
-    if (!user.client) return res.status(403).json({ error: 'No client account' })
+    // accountClosed tells the web client to end the session rather than leave a
+    // fully rendered UI whose every button silently fails.
+    if (!user.client) return res.status(403).json({ error: 'No client account', accountClosed: true })
     if (user.suspended)
-      return res.status(403).json({ error: 'Your account was suspended by your admin' })
+      return res.status(403).json({ error: 'Your account was suspended by your admin', accountClosed: true })
     if (['SUSPENDED', 'TERMINATED'].includes(user.client.status))
-      return res.status(403).json({ error: `Account ${user.client.status.toLowerCase()} - contact support` })
+      return res.status(403).json({ error: `Account ${user.client.status.toLowerCase()} - contact support`, accountClosed: true })
     // Account-wide 2FA enforcement: existing sessions of users who haven't set
     // up 2FA are invalidated so they go through setup at their next login.
     if (settingsOf(user.client).twoFA && !user.totpEnabled)
@@ -190,11 +297,32 @@ export async function authRequired(req, res, next) {
   // Sliding renewal: hand back a fresh 30-minute token once the current one is
   // over a minute old - the web client swaps it in transparently, so the
   // session only dies after 30 minutes of NO requests at all.
-  if (payload.iat && Date.now() / 1000 - payload.iat > 60)
-    res.setHeader('x-refresh-token', sign(user))
+  if (payload.iat && Date.now() / 1000 - payload.iat > 60) {
+    const fresh = sign(user)
+    res.setHeader('x-refresh-token', fresh)
+    setSessionCookie(res, fresh) // keep the uploads cookie in step with the session
+  } else if (readCookie(req, COOKIE) !== token) {
+    // Cookie out of step with the presented token - e.g. the very first request
+    // of a session, or entering/leaving support mode.
+    setSessionCookie(res, token)
+  }
   req.user = user
   req.client = user.client
   next()
+}
+
+// Every workspace route reads req.client. A plain Super Admin has no company of
+// their own, so those routes used to blow up on `req.client.id` and return a
+// bare 500 - which reads as "the app is broken" when the real answer is "open a
+// company workspace first (Companies → Open as support)".
+export function requireClient(req, res, next) {
+  if (req.client) return next()
+  if (req.user?.role === 'SUPER')
+    return res.status(400).json({
+      error: 'Super Admin accounts have no company workspace of their own - open one from Companies to act inside it.',
+      needsWorkspace: true,
+    })
+  return res.status(403).json({ error: 'No client account', accountClosed: true })
 }
 
 export function requireCap(cap) {

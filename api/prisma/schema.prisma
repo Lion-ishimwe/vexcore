@@ -36,6 +36,7 @@ model Client {
   cardIssues CardIssue[]
   payments  Payment[]
   stockIssues StockIssue[]
+  stockReturns StockReturn[]
   stockStores StockStore[]
   stockTransfers StockTransfer[]
 }
@@ -81,6 +82,9 @@ model User {
   totpSecret   String?
   totpEnabled  Boolean  @default(false)
   backupCodes  Json? // sha256 hashes of unused one-time backup codes
+  // Tokens issued before this moment are rejected: set on every password
+  // change/reset so a stolen session dies the moment the password changes.
+  sessionsValidFrom DateTime?
   createdAt    DateTime @default(now())
 
   updates      DailyUpdate[]
@@ -92,6 +96,8 @@ model User {
   memberships  ProjectMember[]
   stockIssued   StockIssue[] @relation("stockIssuer")
   stockReceived StockIssue[] @relation("stockReceiver")
+  stockTaken    StockReturn[] @relation("stockReturnTaker")
+  stockReturned StockReturn[] @relation("stockReturner")
   cardIssues    CardIssue[]
   attendance    AttendanceRecord[]
   managedStores StockStore[] @relation("StoreManager")
@@ -325,6 +331,7 @@ model StockItem {
   materials    PhaseMaterial[]
   usedInUpdates UpdateMaterial[]
   issueItems   StockIssueItem[]
+  returnItems  StockReturnItem[]
   transfers    StockTransfer[]
 
   @@index([clientId])
@@ -350,6 +357,7 @@ model StockIssue {
   createdAt  DateTime @default(now())
 
   items      StockIssueItem[]
+  returns    StockReturn[]
 
   @@index([clientId])
 }
@@ -364,8 +372,57 @@ model StockIssueItem {
   unitSnap     String     @default("pcs")
   qty          Int
   unitCostSnap Int
+  // Running total handed back against this line (good + damaged). The
+  // outstanding quantity - what the person still holds - is qty - returnedQty.
+  returnedQty  Int        @default(0)
+
+  returns      StockReturnItem[]
 
   @@index([issueId])
+}
+
+// The other half of an issue: a worker takes 100 bags in the morning and
+// brings the unused ones back in the afternoon. Each hand-back is recorded
+// against the original issue, so what a person still holds is always known.
+// Good items go back into the store's quantity; damaged ones do not - they
+// are logged as damaged instead, so stock never counts a broken item as usable.
+model StockReturn {
+  id           Int      @id @default(autoincrement())
+  clientId     Int
+  client       Client   @relation(fields: [clientId], references: [id])
+  issueId      Int
+  issue        StockIssue @relation(fields: [issueId], references: [id])
+  receivedById Int      // the Stock Manager / Senior who took the items back
+  receivedBy   User     @relation("stockReturnTaker", fields: [receivedById], references: [id])
+  workerId     Int?     // who handed them back: a worker...
+  worker       Worker?  @relation(fields: [workerId], references: [id])
+  userId       Int?     // ...or a team member (mirrors StockIssue)
+  user         User?    @relation("stockReturner", fields: [userId], references: [id])
+  viaCard      Boolean  @default(false)
+  note         String?
+  createdAt    DateTime @default(now())
+
+  items        StockReturnItem[]
+
+  @@index([clientId])
+  @@index([issueId])
+}
+
+model StockReturnItem {
+  id           Int         @id @default(autoincrement())
+  returnId     Int
+  return       StockReturn @relation(fields: [returnId], references: [id])
+  issueItemId  Int
+  issueItem    StockIssueItem @relation(fields: [issueItemId], references: [id])
+  stockItemId  Int
+  stockItem    StockItem   @relation(fields: [stockItemId], references: [id])
+  nameSnap     String
+  unitSnap     String      @default("pcs")
+  qty          Int
+  unitCostSnap Int
+  condition    String      @default("good") // good = back into stock | damaged = logged as damaged
+
+  @@index([returnId])
 }
 
 model StockRequest {
@@ -417,6 +474,22 @@ model Message {
 model PlatformSettings {
   id                   Int @id @default(1)
   renewalReminderDays  Int @default(5)
+}
+
+// A permanently deleted company takes its own AuditLog rows with it, so the
+// deletion would otherwise leave no trace anywhere. This is the platform's
+// record of what was destroyed, by whom, and how much of it there was.
+model DeletedClient {
+  id         Int      @id @default(autoincrement())
+  clientId   Int      // the id the company used to have
+  company    String
+  country    String?
+  plan       String?
+  status     String?
+  createdAt  DateTime @default(now()) // when the deletion happened
+  signupAt   DateTime? // when the company had originally signed up
+  deletedBy  String   // Super Admin who performed it
+  removed    Json?    // row counts per table, for reference
 }
 
 model DemoBooking {
@@ -485,6 +558,7 @@ model Worker {
   records   AttendanceRecord[]
   issues    CardIssue[]
   stockIssues StockIssue[]
+  stockReturns StockReturn[]
 
   @@unique([clientId, cardId])
   @@index([clientId])

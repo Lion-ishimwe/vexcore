@@ -4,10 +4,10 @@ import {
   UserCheck, UserX, LogIn, LogOut, Lock, Printer, Download, Plus, Pencil, CreditCard,
   MonitorSmartphone, HardHat, Users, BadgeCheck, Hand, FileSpreadsheet, Upload, Play,
 } from 'lucide-react'
-import { api, fmtDay, fmtMoney } from '../api.js'
+import { api, fmtDay, fmtMoney, dayInput } from '../api.js'
 import { useAuth } from '../auth.jsx'
 import { useT } from '../i18n.jsx'
-import { Modal, Field, ErrorNote, Avatar, useForm } from '../ui.jsx'
+import { Modal, Field, ErrorNote, Avatar, useForm, useDialog } from '../ui.jsx'
 
 const hhmm = (d) => d ? new Date(d).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' }) : '-'
 
@@ -21,6 +21,7 @@ function MethodBadge({ method, by }) {
 export default function Attendance() {
   const { can, client } = useAuth()
   const { t } = useT()
+  const { confirm, prompt } = useDialog()
   const [tab, setTab] = useState('today')
   const [error, setError] = useState(null)
 
@@ -52,9 +53,10 @@ export default function Attendance() {
   const [issued, setIssued] = useState(null)
 
   // report
+  // Local calendar days - toISOString() would shift these by a day outside UTC.
   const [range, setRange] = useState({
-    from: new Date(Date.now() - 6 * 86400000).toISOString().slice(0, 10),
-    to: new Date().toISOString().slice(0, 10),
+    from: dayInput(new Date(Date.now() - 6 * 86400000)),
+    to: dayInput(),
   })
   const [report, setReport] = useState(null)
 
@@ -67,14 +69,20 @@ export default function Attendance() {
 
   const loadSessions = () => {
     if (!projectRef.current) return
-    api(`/attendance/sessions/today?projectId=${projectRef.current}`)
+    // Tie the response to the project it was asked for. Switching sites while a
+    // poll was in flight could otherwise populate the new project's view with
+    // the old project's sessions - and the next tap would then be written
+    // against a session belonging to the wrong site.
+    const asked = projectRef.current
+    api(`/attendance/sessions/today?projectId=${asked}`)
       .then((list) => {
+        if (projectRef.current !== asked) return
         setSessions(list)
         setSelectedSid((sid) =>
           list.some((s) => s.id === sid) ? sid
             : (list.find((s) => s.mode !== 'closed') ?? list[0])?.id ?? null)
       })
-      .catch((e) => setError(e.message))
+      .catch((e) => { if (projectRef.current === asked) setError(e.message) })
   }
   const loadWorkers = () => api('/attendance/workers').then(setWorkers).catch((e) => setError(e.message))
 
@@ -113,13 +121,17 @@ export default function Attendance() {
   })
 
   const closeSession = act(async () => {
-    if (!window.confirm('Close this session for the day? Everyone must be clocked out first.')) return
+    const ok = await confirm('Everyone must be clocked out first. No more taps are accepted once it is closed.',
+      { title: 'Close this session for the day?', confirmText: 'Close session' })
+    if (!ok) return
     await api(`/attendance/sessions/${selectedSid}`, { method: 'PATCH', body: { action: 'close' } })
     loadSessions()
   })
 
   const clockOutAll = act(async () => {
-    if (!window.confirm('Clock out everyone who is still clocked in?')) return
+    const ok = await confirm('Everyone still clocked in will be clocked out now.',
+      { title: 'Clock out everyone?', confirmText: 'Clock out all' })
+    if (!ok) return
     await api(`/attendance/sessions/${selectedSid}`, { method: 'PATCH', body: { action: 'outAll' } })
     loadSessions()
   })
@@ -134,12 +146,19 @@ export default function Attendance() {
     loadSessions()
   })
 
+  // Enrolling gave no feedback on a slow connection, so a second tap enrolled
+  // the same worker twice.
+  const [enrolBusy, setEnrolBusy] = useState(false)
   const addWorker = act(async (e) => {
     e.preventDefault()
-    await api('/attendance/workers', { method: 'POST', body: wForm })
-    wSetAll({ name: '', type: 'builder', phone: '', cardId: '', dailyRate: '', projectId: '' })
-    setEnrolOpen(false)
-    loadWorkers()
+    if (enrolBusy) return
+    setEnrolBusy(true)
+    try {
+      await api('/attendance/workers', { method: 'POST', body: wForm })
+      wSetAll({ name: '', type: 'builder', phone: '', cardId: '', dailyRate: '', projectId: '' })
+      setEnrolOpen(false)
+      loadWorkers()
+    } finally { setEnrolBusy(false) }
   })
 
   const downloadTemplate = () => {
@@ -206,10 +225,17 @@ export default function Attendance() {
     loadWorkers()
   })
 
-  const assignCard = (w) => {
-    const cardId = window.prompt(`Card / badge id for ${w.name} - click OK then tap the card if using a USB reader`, w.cardId ?? '')
+  const assignCard = async (w) => {
+    const cardId = await prompt(
+      'Tap the card now if you are using a USB reader, or type the id.',
+      w.cardId ?? '', { title: `Card / badge for ${w.name}`, placeholder: 'e.g. C1-ABC234', confirmText: 'Assign card' })
     if (cardId === null) return
     editWorker(w, { cardId })
+  }
+
+  const renameWorker = async (w) => {
+    const name = await prompt('', w.name, { title: 'Worker name', confirmText: 'Rename' })
+    if (name) editWorker(w, { name })
   }
 
   const loadBadges = act(async () => setBadges(await api('/attendance/workers/badges')))
@@ -717,8 +743,7 @@ export default function Attendance() {
                       <td>
                         <div style={{ display: 'flex', gap: 9, justifyContent: 'flex-end' }}>
                           <CreditCard size={14} className="kaction" title="Assign card" onClick={() => assignCard(w)} />
-                          <Pencil size={14} className="kaction" title="Rename"
-                            onClick={() => { const name = window.prompt('Worker name', w.name); if (name) editWorker(w, { name }) }} />
+                          <Pencil size={14} className="kaction" title="Rename" onClick={() => renameWorker(w)} />
                           <button className="btn ghost sm" onClick={() => editWorker(w, { active: !w.active })}>
                             {w.active ? 'Deactivate' : 'Reactivate'}
                           </button>
@@ -763,8 +788,8 @@ export default function Attendance() {
                   The card/badge id is generated automatically (C{'{company}'}-XXXXXX). To bind a
                   physical RFID card later, use the card action in the workers list.
                 </div>
-                <button className="btn" style={{ width: '100%', justifyContent: 'center' }}>
-                  <Plus size={14} /> Add worker
+                <button className="btn" style={{ width: '100%', justifyContent: 'center' }} disabled={enrolBusy}>
+                  <Plus size={14} /> {enrolBusy ? 'Adding…' : 'Add worker'}
                 </button>
               </form>
             </Modal>

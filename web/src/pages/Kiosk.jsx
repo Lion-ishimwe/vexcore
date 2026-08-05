@@ -26,8 +26,14 @@ export default function Kiosk() {
   const lastScanRef = useRef({ code: null, at: 0 })
   const scanRef = useRef(null)
 
+  // A bookmarked kiosk whose session was closed and pruned - or a tablet that
+  // lost Wi-Fi at boot - used to sit on "Loading…" for ever, silently retrying,
+  // with nothing to tell the gate guard that taps were not being recorded.
+  const [loadError, setLoadError] = useState(null)
   const loadSession = () =>
-    api(`/attendance/sessions/${id}`).then(setSession).catch(() => {})
+    api(`/attendance/sessions/${id}`)
+      .then((s) => { setSession(s); setLoadError(null) })
+      .catch((e) => setLoadError(e.message || 'Cannot reach the server'))
 
   useEffect(() => {
     loadSession()
@@ -145,7 +151,20 @@ export default function Kiosk() {
     }
   }
 
-  if (!session) return <div className="kiosk"><div className="kiosk-banner gray">Loading…</div></div>
+  if (!session) return (
+    <div className="kiosk">
+      <div className={`kiosk-banner ${loadError ? 'red' : 'gray'}`}>
+        {loadError ? 'Session unavailable - taps are NOT being recorded' : 'Loading…'}
+      </div>
+      {loadError && (
+        <div style={{ textAlign: 'center', padding: 24 }}>
+          <p className="muted">{loadError}</p>
+          <p className="muted small">Retrying every 8 seconds. Ask a manager to open a session and reload this page.</p>
+          <button className="btn" onClick={() => window.location.reload()}>Reload</button>
+        </div>
+      )}
+    </div>
+  )
 
   const closed = session.mode === 'closed'
   const win = session.windows

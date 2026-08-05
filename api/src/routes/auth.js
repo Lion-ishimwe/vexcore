@@ -3,12 +3,32 @@ import bcrypt from 'bcryptjs'
 import crypto from 'node:crypto'
 import { verifySync } from 'otplib'
 import { db, audit } from '../db.js'
-import { sign, authRequired, capsFor, settingsOf, signSetupToken, verifySetupToken, signImpersonation } from '../auth.js'
+import {
+  sign, authRequired, capsFor, settingsOf, signSetupToken, verifySetupToken, signImpersonation,
+  setSessionCookie, clearSessionCookie, revocationStamp,
+} from '../auth.js'
 import { subscriptionOf } from '../plans.js'
 import { sendMail, mailConfigured, APP_URL } from '../mail.js'
 import { sha256, normalizeCode, beginTotpSetup, activateTotp } from './account.js'
+import { rateLimit, resetLimit } from '../rateLimit.js'
 
 const r = Router()
+
+// Brute-force protection. Login is limited per IP+email so one attacker cannot
+// grind a single account, and the 2FA step is covered by the same bucket - a
+// 6-digit TOTP is only 10^6 guesses, which is minutes of unthrottled requests.
+const loginLimit = rateLimit({
+  name: 'login', windowMs: 15 * 60 * 1000, max: 10,
+  keyBy: (req) => String(req.body?.email ?? '').trim().toLowerCase(),
+})
+const forgotLimit = rateLimit({ name: 'forgot', windowMs: 60 * 60 * 1000, max: 5 })
+const resetLimiter = rateLimit({ name: 'reset', windowMs: 60 * 60 * 1000, max: 10 })
+const signupLimit = rateLimit({ name: 'signup', windowMs: 60 * 60 * 1000, max: 5 })
+
+// Addresses end up in outbound mail headers, so anything with control
+// characters or spaces is refused at the door.
+export const EMAIL_RE = /^[^\s@<>,;:"'\\]+@[^\s@<>,;:"'\\]+\.[a-zA-Z]{2,}$/
+export const validEmail = (e) => EMAIL_RE.test(String(e ?? '').trim()) && String(e).length <= 254
 
 function publicUser(u) {
   return {
@@ -33,11 +53,21 @@ function sessionPayload(user, client) {
   }
 }
 
+// Every place a session starts also plants the httpOnly cookie that lets
+// <img src="/uploads/..."> authenticate itself.
+function sendSession(res, user, client) {
+  const payload = sessionPayload(user, client)
+  setSessionCookie(res, payload.token)
+  return res.json(payload)
+}
+
 // Client sign-up: creates company account + owner user, starts 14-day trial.
-r.post('/signup', async (req, res) => {
-  const { company, name, email, password, contact, country, location, tin, currency } = req.body
+r.post('/signup', signupLimit, async (req, res) => {
+  const { company, name, password, contact, country, location, tin, currency } = req.body
+  const email = String(req.body.email ?? '').trim().toLowerCase()
   if (!company || !email || !password || !contact || !country || !location)
     return res.status(400).json({ error: 'Company, email, password, contact number, country and location are required' })
+  if (!validEmail(email)) return res.status(400).json({ error: 'Enter a valid email address' })
   if (password.length < 8) return res.status(400).json({ error: 'Password must be at least 8 characters' })
   const existing = await db.user.findUnique({ where: { email } })
   if (existing) return res.status(409).json({ error: 'An account with this email already exists' })
@@ -57,12 +87,13 @@ r.post('/signup', async (req, res) => {
     },
   })
   await audit(client.id, user.name, 'account.created', `${company} signed up (trial)`)
-  res.json(sessionPayload(user, client))
+  sendSession(res, user, client)
 })
 
-r.post('/login', async (req, res) => {
-  const { email, password } = req.body
-  const user = await db.user.findUnique({ where: { email: email ?? '' }, include: { client: true } })
+r.post('/login', loginLimit, async (req, res) => {
+  const { password } = req.body
+  const email = String(req.body.email ?? '').trim().toLowerCase()
+  const user = await db.user.findUnique({ where: { email }, include: { client: true } })
   if (!user || !(await bcrypt.compare(password ?? '', user.passwordHash)))
     return res.status(401).json({ error: 'Wrong email or password' })
   if (user.role !== 'SUPER' && user.suspended)
@@ -99,7 +130,17 @@ r.post('/login', async (req, res) => {
     }
   }
 
-  res.json(sessionPayload(user, user.client))
+  // Credentials were right - clear the throttle so a user who mistyped a few
+  // times first is not left locked out of their own account.
+  resetLimit('login', req, email)
+  sendSession(res, user, user.client)
+})
+
+// Ends the session cookie server-side. The web client drops its own token too,
+// but the cookie is httpOnly so only the server can remove it.
+r.post('/logout', (_req, res) => {
+  clearSessionCookie(res)
+  res.json({ ok: true })
 })
 
 // ---- Forced 2FA setup during login ----
@@ -138,7 +179,9 @@ r.post('/2fa/enable', async (req, res) => {
   if (result.error) return res.status(400).json({ error: result.error })
   // 2FA is now active - log the user straight in with a full session.
   const fresh = await db.user.findUnique({ where: { id: user.id }, include: { client: true } })
-  res.json({ backupCodes: result.backupCodes, session: sessionPayload(fresh, fresh.client) })
+  const session = sessionPayload(fresh, fresh.client)
+  setSessionCookie(res, session.token)
+  res.json({ backupCodes: result.backupCodes, session })
 })
 
 r.get('/me', authRequired, (req, res) => {
@@ -160,10 +203,14 @@ r.post('/impersonate/:clientId', authRequired, async (req, res) => {
   res.json({ token: signImpersonation(req.user, client), company: client.company })
 })
 
-// Forgot password: with SMTP configured the reset link is emailed; without a
-// mailer (dev) the token is returned directly so the flow stays usable.
-r.post('/forgot', async (req, res) => {
-  const user = await db.user.findUnique({ where: { email: req.body.email ?? '' } })
+// Forgot password: the reset link is emailed. It is NEVER returned in the
+// response - doing that (as this used to when SMTP was unconfigured) hands
+// anyone who can reach the API a working reset token for any account, including
+// the platform Super Admin. Without a mailer the token is logged to the server
+// console instead, which keeps local development usable without exposing it.
+r.post('/forgot', forgotLimit, async (req, res) => {
+  const email = String(req.body.email ?? '').trim().toLowerCase()
+  const user = await db.user.findUnique({ where: { email } })
   if (!user) return res.json({ ok: true, emailed: mailConfigured }) // do not reveal which emails exist
   const token = crypto.randomBytes(24).toString('hex')
   await db.resetToken.create({
@@ -179,15 +226,22 @@ r.post('/forgot', async (req, res) => {
     buttonText: 'Reset password',
     buttonUrl: `${APP_URL}/#/login?reset=${token}`,
   })
-  res.json({ ok: true, emailed: mailConfigured, ...(mailConfigured ? {} : { devToken: token }) })
+  if (!mailConfigured)
+    console.log(`[auth:dev] reset link for ${user.email}: ${APP_URL}/#/login?reset=${token}`)
+  res.json({ ok: true, emailed: mailConfigured })
 })
 
-r.post('/reset', async (req, res) => {
+r.post('/reset', resetLimiter, async (req, res) => {
   const { token, password } = req.body
   if (!password || password.length < 8) return res.status(400).json({ error: 'Password must be at least 8 characters' })
   const rt = await db.resetToken.findUnique({ where: { token: token ?? '' } })
   if (!rt || rt.expiresAt < new Date()) return res.status(400).json({ error: 'Invalid or expired reset link' })
-  await db.user.update({ where: { id: rt.userId }, data: { passwordHash: await bcrypt.hash(password, 10) } })
+  await db.user.update({
+    where: { id: rt.userId },
+    // Kill every existing session: a reset is exactly the moment an attacker's
+    // stolen token must stop working.
+    data: { passwordHash: await bcrypt.hash(password, 10), sessionsValidFrom: revocationStamp() },
+  })
   await db.resetToken.deleteMany({ where: { userId: rt.userId } })
   res.json({ ok: true })
 })

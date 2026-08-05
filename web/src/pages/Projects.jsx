@@ -2,13 +2,14 @@ import { useEffect, useState } from 'react'
 import { MapPin, Paperclip, Users, Pencil, Trash2 } from 'lucide-react'
 import { api, fmtMoney } from '../api.js'
 import { useAuth } from '../auth.jsx'
-import { Modal, Field, ErrorNote, useForm } from '../ui.jsx'
+import { Modal, Field, ErrorNote, useForm, useDialog } from '../ui.jsx'
 
 const statusBadge = { 'In progress': 'blue', Planning: 'gray', Done: 'green' }
 const ROLE_LABEL = { SENIOR: 'Senior Engineer', SITE: 'Site Engineer', STOCK: 'Stock Manager', GUEST: 'Guest' }
 
 export default function Projects() {
   const { client, can } = useAuth()
+  const { confirm } = useDialog()
   const [projects, setProjects] = useState(null)
   const [error, setError] = useState(null)
   const [creating, setCreating] = useState(false)
@@ -45,9 +46,11 @@ export default function Projects() {
   }
 
   const deleteProject = async (p) => {
-    const sure = window.confirm(
-      `Delete project "${p.name}"? This permanently removes its phases, daily reports, attendance and team assignments.\n\n` +
-      'Workers and stock items assigned to it are kept - they move back to "all projects" / the general store.\n\nThis cannot be undone.'
+    const sure = await confirm(
+      'This permanently removes its phases, daily reports, attendance and team assignments.\n\n' +
+      'Workers and stock items assigned to it are kept - they move back to "all projects" / the general store.\n\n' +
+      'This cannot be undone.',
+      { title: `Delete project "${p.name}"?`, confirmText: 'Delete project', danger: true }
     )
     if (!sure) return
     setError(null)

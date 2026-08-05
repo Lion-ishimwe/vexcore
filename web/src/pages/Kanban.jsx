@@ -3,7 +3,7 @@ import { Link } from 'react-router-dom'
 import { CalendarDays, UserRound, Banknote, Package, CheckCircle2, Camera, X, Plus, FileText, Pencil, Trash2, BarChart3, FileSpreadsheet, Upload } from 'lucide-react'
 import { api, fmtMoney, fmtDay } from '../api.js'
 import { useAuth } from '../auth.jsx'
-import { Modal, Field, ErrorNote, Lightbox, useForm } from '../ui.jsx'
+import { Modal, Field, ErrorNote, Lightbox, useForm, useDialog } from '../ui.jsx'
 
 const COLS = [
   { key: 'todo', label: 'To do', action: 'Start phase', next: 'active' },
@@ -13,6 +13,7 @@ const COLS = [
 
 export default function Kanban() {
   const { client, can } = useAuth()
+  const { confirm } = useDialog()
   const [projects, setProjects] = useState(null)
   const [projectId, setProjectId] = useState(null)
   const [error, setError] = useState(null)
@@ -28,6 +29,8 @@ export default function Kanban() {
   const [overCol, setOverCol] = useState(null) // column hovered during drag
   const [bulkResult, setBulkResult] = useState(null) // { added, skipped[] }
   const bulkRef = useRef(null)
+  // Without this a second tap on a slow connection creates the phase twice.
+  const [savingPhase, setSavingPhase] = useState(false)
 
   const load = () => api('/projects').then((ps) => {
     setProjects(ps)
@@ -59,12 +62,14 @@ export default function Kanban() {
   const savePhase = async (e) => {
     e.preventDefault()
     setFormError(null)
+    if (savingPhase) return
+    setSavingPhase(true)
     try {
       if (editing) await api(`/projects/phases/${editing.id}`, { method: 'PATCH', body: v })
       else await api(`/projects/${project.id}/phases`, { method: 'POST', body: v })
       setCreating(false); setEditing(null); setAll(emptyForm)
       load()
-    } catch (err) { setFormError(err.message) }
+    } catch (err) { setFormError(err.message) } finally { setSavingPhase(false) }
   }
 
   const openEdit = (ph) => {
@@ -84,7 +89,9 @@ export default function Kanban() {
     // through daily reports stay consumed.
     const note = ph.materials.some((m) => !m.fromUpdate)
       ? '\n\nMaterials drawn by this phase will be returned to stock.' : ''
-    if (!window.confirm(`Delete phase "${ph.name}"? This cannot be undone.${note}`)) return
+    const ok = await confirm(`This cannot be undone.${note}`,
+      { title: `Delete phase "${ph.name}"?`, confirmText: 'Delete phase', danger: true })
+    if (!ok) return
     setToast(null)
     try { await api(`/projects/phases/${ph.id}`, { method: 'DELETE' }); load() }
     catch (err) { setToast(err.message) }
@@ -218,18 +225,19 @@ export default function Kanban() {
               <div className={`kanban-col ${overCol === col.key && dragging ? 'dragover' : ''}`} key={col.key}
                 onDragOver={(e) => { if (dragging) { e.preventDefault(); setOverCol(col.key) } }}
                 onDragLeave={(e) => { if (!e.currentTarget.contains(e.relatedTarget)) setOverCol(null) }}
-                onDrop={(e) => {
+                onDrop={async (e) => {
                   e.preventDefault()
                   setOverCol(null)
-                  if (dragging && dragging.status !== col.key) {
-                    if (dragging.status === 'done' &&
-                      !window.confirm(`"${dragging.name}" is signed off. Move it back to ${col.label}? The client will be notified.`)) {
-                      setDragging(null)
-                      return
-                    }
-                    patchPhase(dragging.id, { status: col.key })
-                  }
+                  const moved = dragging
                   setDragging(null)
+                  if (!moved || moved.status === col.key) return
+                  if (moved.status === 'done') {
+                    const ok = await confirm(
+                      `Move it back to ${col.label}? The client will be notified and the sign-off is reopened.`,
+                      { title: `"${moved.name}" is signed off`, confirmText: `Move to ${col.label}` })
+                    if (!ok) return
+                  }
+                  patchPhase(moved.id, { status: col.key })
                 }}>
                 <h4>{col.label} <span>{items.length}</span></h4>
                 {items.map((ph) => (
@@ -393,8 +401,8 @@ export default function Kanban() {
               <Field label={`Cost per builder / day (${cur})`}><input type="number" min="0" value={v.costPerBuilder} onChange={set('costPerBuilder')} /></Field>
               <Field label={`Cost per helper / day (${cur})`}><input type="number" min="0" value={v.costPerHelper} onChange={set('costPerHelper')} /></Field>
             </div>
-            <button className="btn" style={{ width: '100%', justifyContent: 'center' }}>
-              {editing ? 'Save changes' : 'Create phase'}
+            <button className="btn" style={{ width: '100%', justifyContent: 'center' }} disabled={savingPhase}>
+              {savingPhase ? 'Saving…' : editing ? 'Save changes' : 'Create phase'}
             </button>
           </form>
         </Modal>

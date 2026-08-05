@@ -1,9 +1,9 @@
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { Pencil, X, ChevronRight, ChevronDown } from 'lucide-react'
 import { api } from '../api.js'
 import { useAuth } from '../auth.jsx'
-import { ErrorNote, Field } from '../ui.jsx'
+import { ErrorNote, Field, useDialog } from '../ui.jsx'
 import Account from './Account.jsx'
 
 const TABS = [
@@ -86,6 +86,7 @@ const NOTIF_TOGGLES = [
 
 export default function Settings() {
   const { user, client, updateClient, setCaps, logout } = useAuth()
+  const { confirm } = useDialog()
   const nav = useNavigate()
   const [tab, setTab] = useState('profile')
   const [settings, setSettings] = useState(client.settings)
@@ -117,10 +118,10 @@ export default function Settings() {
     // Turning on account-wide 2FA affects every user - confirm, and warn the
     // admin they'll be logged out to set up their own 2FA if they lack it.
     if (patch.twoFA === true) {
-      const ok = window.confirm(
-        'Require two-factor authentication for all users in this account?\n\n' +
+      const ok = await confirm(
         'Everyone without 2FA will be asked to set it up (QR code + backup codes) at their next login.' +
-        (user.totpEnabled ? '' : '\n\nYou have not set up 2FA yet, so you will be logged out now to set up yours.')
+        (user.totpEnabled ? '' : '\n\nYou have not set up 2FA yet, so you will be logged out now to set up yours.'),
+        { title: 'Require two-factor authentication for everyone?', confirmText: 'Require 2FA' }
       )
       if (!ok) return false
     }
@@ -154,6 +155,29 @@ export default function Settings() {
   const saveProfile = async (e) => {
     e.preventDefault()
     if (await save(draft)) setEditing(false)
+  }
+
+  // Attendance windows: a <input type="time"> emits an event per component as
+  // it is typed (07:00 on the way to 07:30). Saving each one fired racing
+  // PATCHes whose last response won, so the site could end up enforcing a
+  // window nobody chose. The input is now local and only persisted once the
+  // user pauses.
+  const [localTimes, setLocalTimes] = useState(null)
+  const times = localTimes ?? {
+    attInStart: settings?.attInStart, attInEnd: settings?.attInEnd,
+    attOutStart: settings?.attOutStart, attOutEnd: settings?.attOutEnd,
+  }
+  const timeTimer = useRef(null)
+  useEffect(() => () => clearTimeout(timeTimer.current), [])
+  const setTime = (key) => (e) => {
+    const value = e.target.value
+    const next = { ...times, [key]: value }
+    setLocalTimes(next)
+    clearTimeout(timeTimer.current)
+    if (!/^([01]\d|2[0-3]):[0-5]\d$/.test(value)) return // still half-typed
+    timeTimer.current = setTimeout(() => {
+      save({ [key]: value }).then(() => setLocalTimes(null))
+    }, 700)
   }
 
   const uploadLogo = async (file) => {
@@ -433,20 +457,16 @@ export default function Settings() {
           {settings.attWindows && (
             <div className="att-window-grid">
               <label>Clock-in from
-                <input type="time" value={settings.attInStart}
-                  onChange={(e) => save({ attInStart: e.target.value })} />
+                <input type="time" value={times.attInStart} onChange={setTime('attInStart')} />
               </label>
               <label>until
-                <input type="time" value={settings.attInEnd}
-                  onChange={(e) => save({ attInEnd: e.target.value })} />
+                <input type="time" value={times.attInEnd} onChange={setTime('attInEnd')} />
               </label>
               <label>Clock-out from
-                <input type="time" value={settings.attOutStart}
-                  onChange={(e) => save({ attOutStart: e.target.value })} />
+                <input type="time" value={times.attOutStart} onChange={setTime('attOutStart')} />
               </label>
               <label>until
-                <input type="time" value={settings.attOutEnd}
-                  onChange={(e) => save({ attOutEnd: e.target.value })} />
+                <input type="time" value={times.attOutEnd} onChange={setTime('attOutEnd')} />
               </label>
             </div>
           )}
