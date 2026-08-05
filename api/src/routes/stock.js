@@ -667,9 +667,16 @@ r.post('/returns', requireCap('stock.issue'), async (req, res) => {
     return res.status(400).json({ error: 'Return the items of one hand-out at a time' })
   const issueId = [...issueIds][0]
 
+  // A store-scoped manager takes back only their own store's stock, exactly as
+  // POST /issues only hands out their own store's stock. Without this, a return
+  // could top up a store the manager has no business touching.
+  const managedReturn = await managedStoreIds(req)
+
   for (const line of lines) {
     const belongs = worker ? line.issue.workerId === worker.id : line.issue.userId === user.id
     if (!belongs) return res.status(403).json({ error: 'Those items were handed out to somebody else' })
+    if (managedReturn && !managedReturn.includes(line.stockItem?.storeId))
+      return res.status(403).json({ error: `${line.nameSnap} belongs to another store - its own manager has to take it back` })
     const { good, damaged } = wanted.get(line.id)
     const outstanding = line.qty - line.returnedQty
     if (good + damaged > outstanding)

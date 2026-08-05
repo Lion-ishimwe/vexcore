@@ -79,22 +79,30 @@ export function removeStoredFile(name) {
 // every tenant downloadable by URL, logged out. Files are now resolved back to
 // the record that owns them and checked against the caller's account.
 
-// Filenames are immutable and their owner never changes, so the *location* of a
-// file is safe to cache. Mutable bits (a document's visibility, a folder's
-// restriction) are re-read per request.
+// Filenames are immutable and their owner never changes, so a *hit* is safe to
+// cache for ever. A *miss* is not: caching "no owner" permanently meant that
+// asking for a filename before its database row existed made that file
+// unreachable for the life of the process - reachable innocently, because
+// uploads land on disk before their row is written, and deliberately, because
+// the `Date.now()-random` naming is predictable enough to spray. Misses are
+// therefore cached only briefly: long enough to blunt a flood of requests for
+// files that do not exist, short enough to heal on its own.
 const ownerCache = new Map()
 const CACHE_MAX = 5000
+const MISS_TTL_MS = 10_000
 
 function cacheOwner(name, owner) {
   if (ownerCache.size >= CACHE_MAX) ownerCache.clear()
-  ownerCache.set(name, owner)
+  ownerCache.set(name, { owner, expires: owner ? Infinity : Date.now() + MISS_TTL_MS })
   return owner
 }
 
 // Which record does this filename belong to? Returns { clientId } for simple
 // cases, or { docId } when access depends on document visibility.
 async function locate(name) {
-  if (ownerCache.has(name)) return ownerCache.get(name)
+  const hit = ownerCache.get(name)
+  if (hit && hit.expires > Date.now()) return hit.owner
+  if (hit) ownerCache.delete(name) // expired miss - look again
 
   const doc = await db.document.findFirst({ where: { path: name }, select: { id: true, clientId: true } })
   if (doc) return cacheOwner(name, { clientId: doc.clientId, docId: doc.id })

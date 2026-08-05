@@ -21,7 +21,16 @@ const loginLimit = rateLimit({
   name: 'login', windowMs: 15 * 60 * 1000, max: 10,
   keyBy: (req) => String(req.body?.email ?? '').trim().toLowerCase(),
 })
-const forgotLimit = rateLimit({ name: 'forgot', windowMs: 60 * 60 * 1000, max: 5 })
+// Two buckets on purpose. Keyed on IP+email it stops one address being spammed
+// with reset mail; a looser per-IP ceiling on top stops mass enumeration. When
+// this was per-IP only, six requests for a nonsense address exhausted the
+// bucket and locked every other user out of password recovery - and behind NAT
+// or a proxy without TRUST_PROXY, "every other user" means the whole company.
+const forgotLimit = rateLimit({
+  name: 'forgot', windowMs: 60 * 60 * 1000, max: 5,
+  keyBy: (req) => String(req.body?.email ?? '').trim().toLowerCase(),
+})
+const forgotIpLimit = rateLimit({ name: 'forgot-ip', windowMs: 60 * 60 * 1000, max: 60 })
 const resetLimiter = rateLimit({ name: 'reset', windowMs: 60 * 60 * 1000, max: 10 })
 const signupLimit = rateLimit({ name: 'signup', windowMs: 60 * 60 * 1000, max: 5 })
 
@@ -208,7 +217,7 @@ r.post('/impersonate/:clientId', authRequired, async (req, res) => {
 // anyone who can reach the API a working reset token for any account, including
 // the platform Super Admin. Without a mailer the token is logged to the server
 // console instead, which keeps local development usable without exposing it.
-r.post('/forgot', forgotLimit, async (req, res) => {
+r.post('/forgot', forgotIpLimit, forgotLimit, async (req, res) => {
   const email = String(req.body.email ?? '').trim().toLowerCase()
   const user = await db.user.findUnique({ where: { email } })
   if (!user) return res.json({ ok: true, emailed: mailConfigured }) // do not reveal which emails exist
