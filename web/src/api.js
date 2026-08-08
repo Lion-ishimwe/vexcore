@@ -1,7 +1,11 @@
-let token = localStorage.getItem('bridge_token')
+// localStorage is the single source of truth for the session, not a module
+// variable. A cached copy drifts: it survives a login that happened in another
+// component, and it lets a request go out with a token the app has already
+// replaced - which is how an expired token from a dead session ended up being
+// sent (and rejected) after the user had signed back in.
+const currentToken = () => localStorage.getItem('bridge_token')
 
 export function setToken(t) {
-  token = t
   if (t) localStorage.setItem('bridge_token', t)
   else localStorage.removeItem('bridge_token')
 }
@@ -47,9 +51,10 @@ export async function api(path, { method = 'GET', body, form } = {}) {
   // requests with a token we have just discarded only produces more 401s.
   if (loggingOut) throw new Error('Session ended')
   const headers = {}
-  // Read through setToken's variable, but remember exactly which token this
-  // request went out with - see the guard on the refresh below.
-  const sentWith = token
+  // Remember exactly which token this request went out with - both guards below
+  // depend on being able to tell "this failure is about the session we still
+  // have" from "this failure is about a session that has already been replaced".
+  const sentWith = currentToken()
   if (sentWith) headers.Authorization = 'Bearer ' + sentWith
   if (body) headers['Content-Type'] = 'application/json'
   const res = await fetch('/api' + path, {
@@ -66,25 +71,33 @@ export async function api(path, { method = 'GET', body, form } = {}) {
   // dead session. The very next click then failed as "expired" - which is why
   // logging back in appeared to last exactly one interaction.
   const fresh = res.headers.get('x-refresh-token')
-  if (fresh && token && token === sentWith) setToken(fresh)
+  if (fresh && currentToken() === sentWith) setToken(fresh)
   let data = null
   try { data = await res.json() } catch { /* empty body */ }
   if (!res.ok) {
+    // A failure only speaks for the session it was sent with. If the stored
+    // token has changed since this request went out, the user has signed in
+    // again in the meantime and this is the corpse of the previous session
+    // talking - acting on it would evict the new, perfectly good login. Retry
+    // once with the current token instead.
+    const stale = sentWith && currentToken() && currentToken() !== sentWith
+    if (res.status === 401 && stale) return api(path, { method, body, form })
+
     // Account-wide 2FA became required while this session was live: drop the
     // token and send the user back to login, where setup is walked through.
-    if (res.status === 401 && data?.need2faSetup && token) {
+    if (res.status === 401 && data?.need2faSetup && sentWith && !stale) {
       forceLogout({ reason: data.error })
     }
     // Token idled past its window (e.g. browser left closed) → force logout,
     // saying WHY. Landing on a bare login screen mid-action reads as the app
     // throwing the user out for no reason.
-    else if (res.status === 401 && data?.sessionExpired && token) {
+    else if (res.status === 401 && data?.sessionExpired && sentWith && !stale) {
       forceLogout({ idle: true, reason: data.error })
     }
     // The account was suspended, deleted or its company closed while the tab
     // was open. Without this the whole UI stays rendered and every button
     // fails silently with the same red note.
-    else if (res.status === 403 && data?.accountClosed && token) {
+    else if (res.status === 403 && data?.accountClosed && sentWith) {
       forceLogout({ reason: data.error })
     }
     const err = new Error(data?.error || `Request failed (${res.status})`)
