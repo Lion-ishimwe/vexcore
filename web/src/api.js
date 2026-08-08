@@ -5,9 +5,20 @@
 // sent (and rejected) after the user had signed back in.
 const currentToken = () => localStorage.getItem('bridge_token')
 
+const issuedAt = (t) => {
+  try { return JSON.parse(atob(t.split('.')[1].replace(/-/g, '+').replace(/_/g, '/'))).iat ?? 0 }
+  catch { return 0 }
+}
+
 export function setToken(t) {
-  if (t) localStorage.setItem('bridge_token', t)
-  else localStorage.removeItem('bridge_token')
+  if (!t) return localStorage.removeItem('bridge_token')
+  // Never move the session backwards. A cached API response replayed by the
+  // browser can carry an x-refresh-token from an older session; storing it
+  // would swap a live token for a dead one. The server no longer allows those
+  // responses to be cached, and this makes it unable to happen twice.
+  const held = localStorage.getItem('bridge_token')
+  if (held && issuedAt(t) < issuedAt(held)) return
+  localStorage.setItem('bridge_token', t)
 }
 
 // Drop every trace of a session: the working token, the Super Admin token

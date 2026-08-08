@@ -18,6 +18,25 @@ import miscRoutes from './routes/misc.js'
 
 const app = express()
 
+// API responses must never be cached by the browser.
+//
+// Express adds an ETag to every JSON response. With no Cache-Control the
+// browser is free to store the response *and its headers*, then revalidate with
+// If-None-Match. On a 304 it replays the CACHED headers - including the
+// x-refresh-token issued during whichever session first populated that entry.
+// The web client saves that token, so a long-dead session's token silently
+// replaced the live one and the next request was rejected as expired. That is
+// what made a fresh login survive exactly one interaction.
+//
+// Responses are per-user and change constantly; there is nothing to gain by
+// caching them and a session to lose.
+app.set('etag', false)
+app.use('/api', (_req, res, next) => {
+  res.set('Cache-Control', 'no-store, no-cache, must-revalidate')
+  res.set('Pragma', 'no-cache')
+  next()
+})
+
 // CORS used to allow every origin. In production the web app is served by this
 // same process, so no cross-origin call is legitimate; in dev the Vite server
 // on :5330 is. CORS_ORIGINS (comma-separated) overrides for split deployments.
