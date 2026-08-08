@@ -17,7 +17,35 @@ export function endSession() {
   fetch('/api/auth/logout', { method: 'POST' }).catch(() => {})
 }
 
+// A forced sign-out must happen exactly ONCE per session, however many requests
+// discover the problem at the same moment.
+//
+// A page like the dashboard fires a dozen requests at once. When the session has
+// expired every one of them comes back 401, and every one used to run the whole
+// eviction: clear the token, call /auth/logout, reload. The reload does not stop
+// the JavaScript already in flight, so handlers kept resolving *after* the user
+// had reached the login screen and signed back in - and one of those late
+// handlers then cleared the BRAND NEW token. The next click was unauthenticated,
+// which threw the user out again and looked like "the session expired instantly".
+//
+// The flag survives only until the page reloads, which is precisely the lifetime
+// we want: one eviction, then a clean slate.
+let loggingOut = false
+
+function forceLogout({ reason, idle } = {}) {
+  if (loggingOut) return // a sibling request already handled it
+  loggingOut = true
+  endSession()
+  if (idle) sessionStorage.setItem('cms_idle_logout', '1')
+  if (reason) sessionStorage.setItem('cms_closed_reason', reason)
+  window.location.hash = '#/login'
+  window.location.reload()
+}
+
 export async function api(path, { method = 'GET', body, form } = {}) {
+  // Once an eviction is under way the page is on its way out; firing more
+  // requests with a token we have just discarded only produces more 401s.
+  if (loggingOut) throw new Error('Session ended')
   const headers = {}
   if (token) headers.Authorization = 'Bearer ' + token
   if (body) headers['Content-Type'] = 'application/json'
@@ -35,28 +63,19 @@ export async function api(path, { method = 'GET', body, form } = {}) {
     // Account-wide 2FA became required while this session was live: drop the
     // token and send the user back to login, where setup is walked through.
     if (res.status === 401 && data?.need2faSetup && token) {
-      endSession()
-      window.location.hash = '#/login' // HashRouter route
-      window.location.reload()
+      forceLogout({ reason: data.error })
     }
     // Token idled past its window (e.g. browser left closed) → force logout,
     // saying WHY. Landing on a bare login screen mid-action reads as the app
     // throwing the user out for no reason.
-    if (res.status === 401 && data?.sessionExpired && token) {
-      endSession()
-      sessionStorage.setItem('cms_idle_logout', '1')
-      sessionStorage.setItem('cms_closed_reason', data.error ?? '')
-      window.location.hash = '#/login'
-      window.location.reload()
+    else if (res.status === 401 && data?.sessionExpired && token) {
+      forceLogout({ idle: true, reason: data.error })
     }
     // The account was suspended, deleted or its company closed while the tab
     // was open. Without this the whole UI stays rendered and every button
     // fails silently with the same red note.
-    if (res.status === 403 && data?.accountClosed && token) {
-      endSession()
-      sessionStorage.setItem('cms_closed_reason', data.error ?? '')
-      window.location.hash = '#/login'
-      window.location.reload()
+    else if (res.status === 403 && data?.accountClosed && token) {
+      forceLogout({ reason: data.error })
     }
     const err = new Error(data?.error || `Request failed (${res.status})`)
     err.status = res.status
