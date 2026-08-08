@@ -42,6 +42,8 @@ ssh "$HOST" 'sudo systemctl restart cms-api && sleep 2 && systemctl is-active cm
 
 echo "==> verifying"
 ssh "$HOST" 'curl -fsS -o /dev/null -w "   local  /healthz -> %{http_code}\n" http://127.0.0.1:4311/healthz'
-curl -fsS -o /dev/null -w "   public /healthz -> %{http_code}\n" "http://$(ssh "$HOST" 'curl -s -4 ifconfig.me')/healthz" || true
+# nginx answers on the hostname only, so check that rather than the bare IP
+PUBLIC_URL=${PUBLIC_URL:-https://cms.abinnovationgroup.com}
+curl -fsS -o /dev/null -w "   public /healthz -> %{http_code}\n" "$PUBLIC_URL/healthz" || true
 
 echo "Deployed $(git rev-parse --short HEAD)"

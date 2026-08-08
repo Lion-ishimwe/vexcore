@@ -47,7 +47,10 @@ export async function api(path, { method = 'GET', body, form } = {}) {
   // requests with a token we have just discarded only produces more 401s.
   if (loggingOut) throw new Error('Session ended')
   const headers = {}
-  if (token) headers.Authorization = 'Bearer ' + token
+  // Read through setToken's variable, but remember exactly which token this
+  // request went out with - see the guard on the refresh below.
+  const sentWith = token
+  if (sentWith) headers.Authorization = 'Bearer ' + sentWith
   if (body) headers['Content-Type'] = 'application/json'
   const res = await fetch('/api' + path, {
     method, headers,
@@ -55,8 +58,15 @@ export async function api(path, { method = 'GET', body, form } = {}) {
   })
   // Sliding session: the server hands back a fresh 30-minute token on active
   // use - swap it in so the session only expires after 30 idle minutes.
+  //
+  // Only accept it if the session has not moved on in the meantime. When a
+  // session expires, requests from the dead session are still in flight; if the
+  // user reaches the login screen and signs in before those land, storing their
+  // refresh token would overwrite the BRAND NEW token with one belonging to the
+  // dead session. The very next click then failed as "expired" - which is why
+  // logging back in appeared to last exactly one interaction.
   const fresh = res.headers.get('x-refresh-token')
-  if (fresh && token) setToken(fresh)
+  if (fresh && token && token === sentWith) setToken(fresh)
   let data = null
   try { data = await res.json() } catch { /* empty body */ }
   if (!res.ok) {
