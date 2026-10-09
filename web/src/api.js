@@ -10,15 +10,40 @@ const issuedAt = (t) => {
   catch { return 0 }
 }
 
+// Deliberate switches (login, entering or leaving support mode) always win.
+// The "never go backwards" rule belongs to background refreshes only - see
+// api() - because leaving support mode restores the Super Admin's token, which
+// is by definition older than the support token it replaces. Applying the rule
+// here silently refused that switch and kept the operator inside the company.
 export function setToken(t) {
-  if (!t) return localStorage.removeItem('bridge_token')
-  // Never move the session backwards. A cached API response replayed by the
-  // browser can carry an x-refresh-token from an older session; storing it
-  // would swap a live token for a dead one. The server no longer allows those
-  // responses to be cached, and this makes it unable to happen twice.
-  const held = localStorage.getItem('bridge_token')
-  if (held && issuedAt(t) < issuedAt(held)) return
-  localStorage.setItem('bridge_token', t)
+  if (t) localStorage.setItem('bridge_token', t)
+  else localStorage.removeItem('bridge_token')
+}
+
+// Support mode parks the Super Admin's own token while they act inside a
+// company, and "Exit support" restores it. Nothing used it in between, so after
+// 30 minutes of support work it had expired and exiting landed on the login
+// screen. This renews it from the server and returns a token that can be used
+// right now, or null when the server says the admin session is over.
+//
+// credentials: 'omit' keeps the renewal from touching the uploads cookie, which
+// must stay on the support session while support mode is open.
+const PARKED = 'bridge_super_token'
+export async function renewParkedToken() {
+  const parked = localStorage.getItem(PARKED)
+  if (!parked) return null
+  try {
+    const res = await fetch('/api/auth/me', {
+      headers: { Authorization: 'Bearer ' + parked }, credentials: 'omit', cache: 'no-store',
+    })
+    if (res.status === 401 || res.status === 403) return null
+    const fresh = res.headers.get('x-refresh-token')
+    const usable = fresh && issuedAt(fresh) >= issuedAt(parked) ? fresh : parked
+    if (localStorage.getItem(PARKED) === parked) localStorage.setItem(PARKED, usable)
+    return usable
+  } catch {
+    return parked // offline for a moment - the token may well still be good
+  }
 }
 
 // Drop every trace of a session: the working token, the Super Admin token
@@ -81,8 +106,10 @@ export async function api(path, { method = 'GET', body, form } = {}) {
   // refresh token would overwrite the BRAND NEW token with one belonging to the
   // dead session. The very next click then failed as "expired" - which is why
   // logging back in appeared to last exactly one interaction.
+  // A refresh must also never be older than the token it replaces (a replayed
+  // cached response once carried a 45-minute-old one).
   const fresh = res.headers.get('x-refresh-token')
-  if (fresh && currentToken() === sentWith) setToken(fresh)
+  if (fresh && currentToken() === sentWith && issuedAt(fresh) >= issuedAt(sentWith)) setToken(fresh)
   let data = null
   try { data = await res.json() } catch { /* empty body */ }
   if (!res.ok) {

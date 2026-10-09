@@ -36,7 +36,7 @@ import Payments from './pages/Payments.jsx'
 import AdminSettings from './pages/AdminSettings.jsx'
 import AdminAudit from './pages/AdminAudit.jsx'
 import Account from './pages/Account.jsx'
-import { api, setToken, fmtDate, fmtDay } from './api.js'
+import { api, setToken, endSession, renewParkedToken, fmtDate, fmtDay } from './api.js'
 import { Modal } from './ui.jsx'
 
 const NAV = [
@@ -131,14 +131,35 @@ function trialLabel(client) {
 export default function App() {
   const { user, client, subscription, impersonating, can, loading, logout } = useAuth()
 
-  // Leave support mode: restore the parked Super Admin token.
-  const exitSupport = () => {
-    const sup = localStorage.getItem('bridge_super_token')
+  // Leave support mode: restore the Super Admin's own session and land straight
+  // back in the platform admin portal.
+  const [leavingSupport, setLeavingSupport] = useState(false)
+  const exitSupport = async () => {
+    if (leavingSupport) return
+    setLeavingSupport(true)
+    const sup = await renewParkedToken()
     localStorage.removeItem('bridge_super_token')
-    setToken(sup ?? null)
-    window.location.hash = '#/admin/companies'
+    if (sup) {
+      setToken(sup)
+      window.location.hash = '#/admin/companies'
+    } else {
+      // The admin session itself is over (e.g. the browser sat closed for
+      // hours): say so on the login screen instead of dropping there silently.
+      endSession()
+      sessionStorage.setItem('cms_closed_reason', 'Your admin session ended - log in again')
+      window.location.hash = '#/login'
+    }
     window.location.reload()
   }
+  // While support mode is open, keep the parked admin session renewed so
+  // exiting works however long the support visit lasts.
+  const inSupport = !!impersonating
+  useEffect(() => {
+    if (!inSupport) return
+    renewParkedToken()
+    const id = setInterval(renewParkedToken, 5 * 60 * 1000)
+    return () => clearInterval(id)
+  }, [inSupport])
   const { t } = useT()
   const loc = useLocation()
   const nav2 = useNavigate()
@@ -233,7 +254,9 @@ export default function App() {
           <div className="support-bar no-print">
             <Shield size={13} />
             <span>Support mode - you are acting as the admin of <b>{impersonating.company}</b></span>
-            <button className="btn sm" onClick={exitSupport}>Exit support</button>
+            <button className="btn sm" onClick={exitSupport} disabled={leavingSupport}>
+              {leavingSupport ? 'Leaving…' : 'Exit support'}
+            </button>
           </div>
         )}
         <header className="topbar">
