@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import {
   Search, LayoutGrid, List, Download, MoreHorizontal, Wrench, PauseCircle,
-  PlayCircle, XCircle, Building2, Trash2, AlertTriangle,
+  PlayCircle, XCircle, Trash2, AlertTriangle,
 } from 'lucide-react'
 import { api, setToken, fmtDay } from '../api.js'
 import { Avatar, ErrorNote, Modal, Field } from '../ui.jsx'
@@ -204,10 +204,6 @@ export default function Companies() {
           </table>
         </div>
       )}
-      <p className="small muted" style={{ marginTop: 12 }}>
-        <Building2 size={12} /> Clicking a company opens its workspace in support mode - you act as its
-        admin with full access to every feature and setting, and your visit is recorded in the company's audit trail.
-      </p>
 
       {deleting && (
         <Modal title={`Delete "${deleting.company}" permanently`} onClose={() => setDeleting(null)}>
