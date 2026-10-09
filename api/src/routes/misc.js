@@ -981,8 +981,8 @@ r.get('/admin/clients', superOnly, async (_req, res) => {
 // customer has asked to have erased.
 //
 // Guards: Super Admin only, never from inside a support session (you would be
-// deleting the workspace you are standing in), and the exact company name has
-// to be typed back so a misclick in a list cannot destroy a tenant.
+// deleting the workspace you are standing in), and the word DELETE has to be
+// typed so a misclick in a list cannot destroy a tenant.
 r.delete('/admin/clients/:id', superOnly, async (req, res) => {
   if (req.impersonating)
     return res.status(403).json({ error: 'Leave support mode before deleting a company' })
@@ -990,11 +990,8 @@ r.delete('/admin/clients/:id', superOnly, async (req, res) => {
   const client = await db.client.findUnique({ where: { id: +req.params.id } })
   if (!client) return res.status(404).json({ error: 'Company not found' })
 
-  const typed = String(req.body?.confirm ?? '').trim()
-  if (typed !== client.company)
-    return res.status(400).json({
-      error: `Type the company name exactly ("${client.company}") to confirm permanent deletion`,
-    })
+  if (String(req.body?.confirm ?? '').trim() !== 'DELETE')
+    return res.status(400).json({ error: 'Type DELETE to confirm permanent deletion' })
 
   const result = await deleteClientCascade(client.id, { deletedBy: req.user.name })
   console.warn(`[cms] company permanently deleted: "${result.company}" (id ${client.id}) by ${req.user.name} - ${JSON.stringify(result.counts)}`)

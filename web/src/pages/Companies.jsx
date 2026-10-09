@@ -48,10 +48,13 @@ export default function Companies() {
 
   // ---- Permanent deletion ----
   // No undo and no soft-delete, so this is deliberately harder than a click:
-  // the exact company name has to be typed back, the same way the server
-  // re-checks it. Suspending is the reversible option and stays one click.
+  // the word DELETE has to be typed, and the server re-checks it. (It used to
+  // be the company name, which failed whenever the stored name carried a stray
+  // space.) Suspending is the reversible option and stays one click.
   const [deleting, setDeleting] = useState(null) // the company being deleted
   const [typed, setTyped] = useState('')
+  const CONFIRM_WORD = 'DELETE'
+  const confirmed = typed.trim() === CONFIRM_WORD
   const [delErr, setDelErr] = useState(null)
   const [delBusy, setDelBusy] = useState(false)
   const [deleted, setDeleted] = useState(null) // summary of what went
@@ -63,10 +66,10 @@ export default function Companies() {
 
   const confirmDelete = async (e) => {
     e.preventDefault()
-    if (delBusy || typed.trim() !== deleting.company) return
+    if (delBusy || !confirmed) return
     setDelBusy(true); setDelErr(null)
     try {
-      const r = await api(`/admin/clients/${deleting.id}`, { method: 'DELETE', body: { confirm: typed.trim() } })
+      const r = await api(`/admin/clients/${deleting.id}`, { method: 'DELETE', body: { confirm: CONFIRM_WORD } })
       setDeleting(null)
       setDeleted(r)
       load()
@@ -224,13 +227,14 @@ export default function Companies() {
             that is reversible.
           </p>
           <form onSubmit={confirmDelete}>
-            <Field label={`Type the company name to confirm`}>
-              <input value={typed} autoFocus autoComplete="off" placeholder={deleting.company}
+            <Field label={<>Type <b>{CONFIRM_WORD}</b> to confirm</>}>
+              <input value={typed} autoFocus autoComplete="off" autoCapitalize="characters"
+                spellCheck={false} placeholder={CONFIRM_WORD}
                 onChange={(e) => setTyped(e.target.value)} />
             </Field>
             <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
               <button type="button" className="btn ghost" onClick={() => setDeleting(null)}>Cancel</button>
-              <button className="btn danger" disabled={delBusy || typed.trim() !== deleting.company}>
+              <button className="btn danger" disabled={delBusy || !confirmed}>
                 {delBusy ? 'Deleting…' : 'Delete this company for ever'}
               </button>
             </div>
