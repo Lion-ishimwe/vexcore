@@ -170,10 +170,7 @@ export default function Updates() {
                     </span>
                   ))
                 ) : (
-                  <>
-                    <span className="chip"><HardHat size={12} /> {u.builders} builders</span>
-                    <span className="chip"><Users size={12} /> {u.helpers} helpers</span>
-                  </>
+                  <span className="chip"><HardHat size={12} /> No crew recorded</span>
                 )}
                 {u.geotag && <span className="chip"><MapPin size={12} /> {u.geotag}</span>}
                 <span className="chip"><Clock size={12} /> Auto-timestamped</span>

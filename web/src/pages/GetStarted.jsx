@@ -19,7 +19,7 @@ export function PubNav() {
         <img className="logo-mark" src="/logo.png" alt="VEXCORE logo" />
         <div>
           <div className="logo-name" style={{ color: 'var(--text)' }}>VEXCORE</div>
-          <div className="logo-sub">Construction Management System</div>
+          <div className="logo-sub">Project &amp; Site Management</div>
         </div>
       </Link>
       <div className="mk-links">
@@ -44,7 +44,7 @@ export function PubFoot() {
             <img className="logo-mark" src="/logo.png" alt="VEXCORE logo" />
             <div className="logo-name" style={{ color: '#fff' }}>VEXCORE</div>
           </div>
-          <p>One place to plan projects, track daily progress, manage stock, and control spending - built for construction teams in East Africa.</p>
+          <p>One place to plan projects, track daily progress, manage stock, and control spending - built for construction, HVAC, IT and other field teams in East Africa.</p>
         </div>
         <div>
           <h5>Get in touch</h5>
@@ -67,7 +67,7 @@ export function PubFoot() {
           <span>Reports &amp; audit trail</span>
         </div>
       </div>
-      <div className="mk-foot-base">© 2026 VEXCORE · Construction Management System · All rights reserved</div>
+      <div className="mk-foot-base">© 2026 VEXCORE · Project &amp; Site Management · All rights reserved</div>
     </footer>
   )
 }
@@ -305,11 +305,12 @@ export default function GetStarted() {
       <header className="mk-hero">
         <div className="mk-hero-inner">
           <div className="mk-hero-copy">
-            <span className="mk-eyebrow">All-in-one construction management</span>
-            <h1>Easy, affordable construction management software</h1>
+            <span className="mk-eyebrow">All-in-one project &amp; site management</span>
+            <h1>Easy, affordable project &amp; site management software</h1>
             <p className="mk-sub">
               Plan projects, track daily progress from the site, manage stock, and control
-              spending phase by phase - with your whole team on the same page.
+              spending phase by phase - for construction, HVAC &amp; electrical, IT &amp; networking
+              and every team that works on site.
             </p>
             <div className="mk-price-line">
               <b>From 30,000 RWF/month</b>
@@ -355,7 +356,7 @@ export default function GetStarted() {
       </section>
 
       <section className="mk-section alt">
-        <h2>Created for construction teams, by people on site</h2>
+        <h2>Created for field teams, by people on site</h2>
         <p className="mk-section-sub">Every role sees exactly what they need - nothing more, nothing less.</p>
         <div className="mk-role-grid">
           {ROLES.map((r) => (

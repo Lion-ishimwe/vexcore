@@ -11,6 +11,7 @@ import { subscriptionOf } from '../plans.js'
 import { sendMail, mailConfigured, APP_URL } from '../mail.js'
 import { sha256, normalizeCode, beginTotpSetup, activateTotp } from './account.js'
 import { rateLimit, resetLimit } from '../rateLimit.js'
+import { INDUSTRIES } from '../crew.js'
 
 const r = Router()
 
@@ -80,6 +81,10 @@ r.post('/signup', signupLimit, async (req, res) => {
   if (password.length < 8) return res.status(400).json({ error: 'Password must be at least 8 characters' })
   const existing = await db.user.findUnique({ where: { email } })
   if (existing) return res.status(409).json({ error: 'An account with this email already exists' })
+  // The industry only decides which worker types the company starts with
+  // (builder/helper, technician/electrician/..., cable installer/...); they
+  // stay editable in Settings.
+  const industry = INDUSTRIES[req.body.industry] ? req.body.industry : 'construction'
 
   const client = await db.client.create({
     data: {
@@ -87,6 +92,7 @@ r.post('/signup', signupLimit, async (req, res) => {
       currency: currency || 'RWF',
       status: 'TRIAL',
       trialEndsAt: new Date(Date.now() + 14 * 24 * 3600 * 1000),
+      settings: { industry, workerTypes: INDUSTRIES[industry].workerTypes },
     },
   })
   const user = await db.user.create({

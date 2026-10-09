@@ -1,4 +1,5 @@
 import { Router } from 'express'
+import { Prisma } from '@prisma/client'
 import path from 'node:path'
 import { db, audit } from '../db.js'
 import { requireCap, can, settingsOf } from '../auth.js'
@@ -7,6 +8,13 @@ import { checkLowStock } from '../stockAlerts.js'
 import { planLimits } from '../plans.js'
 import { scopedProjectIds, inScope } from '../scope.js'
 import { uploader, discardUploads, UPLOADS } from '../uploads.js'
+import { crewCost, crewOf, crewSummary, cleanRates } from '../crew.js'
+
+// Phase rates from a request: crewRates, or the old two-rate fields still sent
+// by phase CSV files made from the earlier template.
+const ratesFromBody = (b) => cleanRates(b.crewRates ?? (
+  b.costPerBuilder !== undefined || b.costPerHelper !== undefined
+    ? { builder: b.costPerBuilder, helper: b.costPerHelper } : null))
 
 const r = Router()
 
@@ -82,7 +90,7 @@ function phaseSpent(phase, wageDays) {
   }
   const labor = phase.updates.reduce(
     (s, u) => paidDays.has(dayKey(u.createdAt)) ? s
-      : s + u.builders * phase.costPerBuilder + u.helpers * phase.costPerHelper, 0)
+      : s + crewCost(u, phase), 0)
   // Materials: drawn from stock via the phase + reported as used in this
   // phase's daily updates (both deduct stock and snapshot the unit cost).
   const materials = phase.materials.reduce((s, m) => s + m.qty * m.unitCostSnap, 0) +
@@ -108,7 +116,7 @@ function shapePhase(ph, wageDays, showMoney = true) {
     id: ph.id, projectId: ph.projectId, name: ph.name, status: ph.status,
     percent: derivedPercent(ph),
     startDate: ph.startDate, endDate: ph.endDate, budget: money(ph.budget),
-    costPerBuilder: money(ph.costPerBuilder), costPerHelper: money(ph.costPerHelper),
+    crewRates: showMoney ? (ph.crewRates ?? {}) : null,
     assignee: ph.assignee ? { id: ph.assignee.id, name: ph.assignee.name } : null,
     materials: [
       ...ph.materials.map(m => ({ id: m.id, name: m.nameSnap, qty: m.qty, unitCost: money(m.unitCostSnap) })),
@@ -326,7 +334,7 @@ r.post('/:id/phases', requireCap('phases.edit'), async (req, res) => {
   const scope = await scopedProjectIds(req)
   const project = await db.project.findFirst({ where: { id: +req.params.id, clientId: req.client.id } })
   if (!project || !inScope(scope, project.id)) return res.status(404).json({ error: 'Project not found' })
-  const { name, budget, costPerBuilder, costPerHelper, startDate, endDate } = req.body
+  const { name, budget, startDate, endDate } = req.body
   if (!name) return res.status(400).json({ error: 'Phase name is required' })
   const assignee = await resolveAssignee(req)
   if (assignee.error) return res.status(400).json({ error: assignee.error })
@@ -334,8 +342,7 @@ r.post('/:id/phases', requireCap('phases.edit'), async (req, res) => {
   const phase = await db.phase.create({
     data: {
       projectId: project.id, name, budget: Math.max(0, Number(budget) || 0),
-      costPerBuilder: Math.max(0, Number(costPerBuilder) || 0),
-      costPerHelper: Math.max(0, Number(costPerHelper) || 0),
+      crewRates: ratesFromBody(req.body) ?? undefined,
       startDate: startDate ? new Date(startDate) : null,
       endDate: endDate ? new Date(endDate) : null,
       assigneeId: assignee.skip ? null : assignee.assigneeId,
@@ -379,8 +386,7 @@ r.post('/:id/phases/bulk', requireCap('phases.edit'), async (req, res) => {
     valid.push({
       projectId: project.id, name, status: 'todo',
       budget: Number(raw.budget) || 0,
-      costPerBuilder: Number(raw.costPerBuilder) || 0,
-      costPerHelper: Number(raw.costPerHelper) || 0,
+      crewRates: ratesFromBody(raw) ?? undefined,
       startDate, endDate, orderIdx: orderIdx++,
     })
   }
@@ -418,11 +424,12 @@ r.patch('/phases/:id', requireCap('phases.edit'), async (req, res) => {
 
   // Editable details
   if (req.body.name !== undefined && String(req.body.name).trim()) data.name = String(req.body.name).trim()
-  for (const k of ['budget', 'costPerBuilder', 'costPerHelper'])
-    if (req.body[k] !== undefined) data[k] = Number(req.body[k]) || 0
+  if (req.body.budget !== undefined) data.budget = Number(req.body.budget) || 0
+  if (req.body.crewRates !== undefined || req.body.costPerBuilder !== undefined || req.body.costPerHelper !== undefined)
+    data.crewRates = ratesFromBody(req.body) ?? Prisma.DbNull
   for (const k of ['startDate', 'endDate'])
     if (req.body[k] !== undefined) data[k] = req.body[k] ? new Date(req.body[k]) : null
-  if (['name', 'budget', 'costPerBuilder', 'costPerHelper', 'startDate', 'endDate'].some(k => k in data))
+  if (['name', 'budget', 'crewRates', 'startDate', 'endDate'].some(k => k in data))
     await audit(req.client.id, req.user.name, 'phase.edited', data.name ?? phase.name)
 
   if (data.status === 'done') {
@@ -790,7 +797,7 @@ r.get('/phases/:id/report', requireCap('phases.view'), async (req, res) => {
   let crewEstimate = 0
   for (const u of phase.updates) {
     if (!wageDays.has(dayKey(u.createdAt)))
-      crewEstimate += u.builders * phase.costPerBuilder + u.helpers * phase.costPerHelper
+      crewEstimate += crewCost(u, phase)
   }
 
   // Materials: drawn from stock via the phase + consumed in its daily reports.
@@ -928,8 +935,7 @@ r.get('/updates', requireCap('updates.view'), async (req, res) => {
   res.json(updates.map(u => ({
     id: u.id, by: u.user.name, byPhoto: u.user.photo ? '/uploads/' + u.user.photo : null,
     project: u.project.name, phase: u.phase?.name ?? null,
-    builders: u.builders, helpers: u.helpers,
-    crew: Array.isArray(u.crew) ? u.crew : null, // per-type breakdown when recorded
+    crew: crewOf(u),
     note: u.note, geotag: u.geotag,
     forwarded: u.forwarded, createdAt: u.createdAt,
     media: u.media.map(m => ({ id: m.id, kind: m.kind, url: '/uploads/' + path.basename(m.path) })),
@@ -944,7 +950,7 @@ r.post('/updates', requireCap('updates.submit'), upload.array('media', 12), asyn
   // even though the role holds every other capability.
   if (req.user.role === 'CLIENT')
     return res.status(403).json({ error: 'Daily updates are submitted by the site team - they reach you once the Senior Engineer forwards them' })
-  const { projectId, phaseId, builders, helpers, note, geotag } = req.body
+  const { projectId, phaseId, note, geotag } = req.body
   const scope = await scopedProjectIds(req)
   const project = await db.project.findFirst({ where: { id: +projectId, clientId: req.client.id } })
   if (!project || !inScope(scope, project.id)) { discardUploads(req); return res.status(400).json({ error: 'Pick a project' }) }
@@ -961,10 +967,13 @@ r.post('/updates', requireCap('updates.submit'), upload.array('media', 12), asyn
   // Crew on site: [{ type, count }] per worker type. Normally sent by the form
   // (pulled automatically from today's attendance, plus manual additions); if
   // absent, it is derived from attendance right here so the report never
-  // misses who was on site. builders/helpers stay as legacy rollups.
+  // misses who was on site. A page still running the previous version sends
+  // builders/helpers counts instead; they are read as those two types.
   let crew = []
   if (req.body.crew) {
     try { crew = JSON.parse(req.body.crew) } catch { return res.status(400).json({ error: 'Bad crew payload' }) }
+  } else if (req.body.builders || req.body.helpers) {
+    crew = [{ type: 'builder', count: req.body.builders }, { type: 'helper', count: req.body.helpers }]
   }
   crew = (Array.isArray(crew) ? crew : [])
     .map(c => ({ type: String(c.type ?? '').trim().toLowerCase().slice(0, 40), count: Math.floor(Number(c.count)) }))
@@ -989,13 +998,10 @@ r.post('/updates', requireCap('updates.submit'), upload.array('media', 12), asyn
     }
     crew = [...byType.entries()].map(([type, count]) => ({ type, count }))
   }
-  // Merge duplicate type rows, then roll up: helpers stay helpers, every
-  // other type counts as a builder (same convention as attendance counts).
+  // Merge duplicate type rows.
   const merged = new Map()
   for (const c of crew) merged.set(c.type, (merged.get(c.type) ?? 0) + c.count)
   crew = [...merged.entries()].map(([type, count]) => ({ type, count }))
-  const crewBuilders = crew.filter(c => c.type !== 'helper').reduce((s, c) => s + c.count, 0)
-  const crewHelpers = crew.find(c => c.type === 'helper')?.count ?? 0
 
   // Items used today: validated against stock and deducted on submit so the
   // report closes the day with accurate quantities. Snapshots keep the report
@@ -1037,8 +1043,6 @@ r.post('/updates', requireCap('updates.submit'), upload.array('media', 12), asyn
       data: {
         clientId: req.client.id, projectId: project.id,
         phaseId: phase?.id ?? null, userId: req.user.id,
-        builders: crew.length ? crewBuilders : Number(builders) || 0,
-        helpers: crew.length ? crewHelpers : Number(helpers) || 0,
         crew: crew.length ? crew : undefined,
         note: note || null, geotag: geotag || null,
         media: {
@@ -1070,11 +1074,8 @@ r.post('/updates', requireCap('updates.submit'), upload.array('media', 12), asyn
   const itemNote = draws.length
     ? `, used ${draws.map(d => `${d.qty} ${d.item.unit} ${d.item.name}`).join(', ')}`
     : ''
-  const crewSummary = crew.length
-    ? crew.map(c => `${c.count} ${c.type}${c.count === 1 ? '' : 's'}`).join(' · ')
-    : `${update.builders} builders · ${update.helpers} helpers`
   await audit(req.client.id, req.user.name, 'update.submitted',
-    `${project.name}: ${crewSummary}, ${update.media.length} media${itemNote}`)
+    `${project.name}: ${crewSummary(crew)}, ${update.media.length} media${itemNote}`)
 
   // Email the Senior Engineers that a daily report landed (the submitter is
   // skipped - they know). The Admin is NOT emailed here: reports reach them
@@ -1091,7 +1092,7 @@ r.post('/updates', requireCap('updates.submit'), upload.array('media', 12), asyn
     title: 'Daily report submitted',
     lines: [
       `<b>${req.user.name}</b> submitted a daily report for <b>${project.name}</b>${phaseName ? ` › <b>${phaseName}</b>` : ''}.`,
-      `Crew on site: ${crewSummary}${update.media.length ? ` · ${update.media.length} photo/video${update.media.length === 1 ? '' : 's'}` : ''}.`,
+      `Crew on site: ${crewSummary(crew)}${update.media.length ? ` · ${update.media.length} photo/video${update.media.length === 1 ? '' : 's'}` : ''}.`,
       draws.length ? `Items used: ${draws.map(d => `${d.qty} ${d.item.unit} ${d.item.name}`).join(', ')}.` : '',
       update.note ? `Note: &ldquo;${String(update.note).slice(0, 200)}&rdquo;` : '',
     ].filter(Boolean),
@@ -1126,14 +1127,11 @@ r.post('/updates/:id/forward', requireCap('updates.forward'), async (req, res) =
     const admins = await db.user.findMany({
       where: { clientId: req.client.id, role: 'CLIENT', NOT: { id: req.user.id } },
     })
-    const crewSummary = Array.isArray(u.crew) && u.crew.length
-      ? u.crew.map(c => `${c.count} ${c.type}${c.count === 1 ? '' : 's'}`).join(' · ')
-      : `${u.builders} builder${u.builders === 1 ? '' : 's'} · ${u.helpers} helper${u.helpers === 1 ? '' : 's'}`
     sendMail(admins.map(a => a.email), `Daily report forwarded - ${u.project.name}`, {
       title: 'Daily report forwarded to you',
       lines: [
         `<b>${req.user.name}</b> forwarded ${u.user.name}'s daily report for <b>${u.project.name}</b>${u.phase ? ` › <b>${u.phase.name}</b>` : ''}.`,
-        `Crew on site: ${crewSummary}${u.media.length ? ` · ${u.media.length} photo/video${u.media.length === 1 ? '' : 's'}` : ''}.`,
+        `Crew on site: ${crewSummary(crewOf(u))}${u.media.length ? ` · ${u.media.length} photo/video${u.media.length === 1 ? '' : 's'}` : ''}.`,
         u.note ? `Note: &ldquo;${String(u.note).slice(0, 200)}&rdquo;` : '',
       ].filter(Boolean),
       buttonText: 'Open daily updates',

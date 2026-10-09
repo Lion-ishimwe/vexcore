@@ -21,7 +21,10 @@ export default function Kanban() {
   const [creating, setCreating] = useState(false)
   const [editing, setEditing] = useState(null) // phase being edited
   const [team, setTeam] = useState([])
-  const [v, set, setAll] = useForm({ name: '', budget: '', costPerBuilder: '', costPerHelper: '', startDate: '', endDate: '', assigneeId: '' })
+  const [v, set, setAll] = useForm({ name: '', budget: '', startDate: '', endDate: '', assigneeId: '' })
+  // Daily rate per crew type for this phase's crew-cost estimate, keyed by the
+  // company's own worker types (builder, technician, cable installer, ...).
+  const [rates, setRates] = useState({})
   const [formError, setFormError] = useState(null)
   const [newIns, setNewIns] = useState({}) // draft insight title per phase id
   const [lightbox, setLightbox] = useState(null)
@@ -48,6 +51,11 @@ export default function Kanban() {
   const showMoney = can('stock.amounts')
   const canEdit = can('phases.edit')
   const cur = client?.currency
+  const workerTypes = client?.settings?.workerTypes ?? ['builder', 'helper']
+  const label = (t) => t.charAt(0).toUpperCase() + t.slice(1)
+  // Hidden from roles that may not see money; their edits must leave rates alone.
+  const ratesVisible = !editing || editing.crewRates !== null
+  const rateTypes = [...new Set([...workerTypes, ...Object.keys(editing?.crewRates ?? {})])]
 
   const patchPhase = async (phaseId, body) => {
     setToast(null)
@@ -57,7 +65,7 @@ export default function Kanban() {
     } catch (err) { setToast(err.message) }
   }
 
-  const emptyForm = { name: '', budget: '', costPerBuilder: '', costPerHelper: '', startDate: '', endDate: '', assigneeId: '' }
+  const emptyForm = { name: '', budget: '', startDate: '', endDate: '', assigneeId: '' }
 
   const savePhase = async (e) => {
     e.preventDefault()
@@ -65,9 +73,10 @@ export default function Kanban() {
     if (savingPhase) return
     setSavingPhase(true)
     try {
-      if (editing) await api(`/projects/phases/${editing.id}`, { method: 'PATCH', body: v })
-      else await api(`/projects/${project.id}/phases`, { method: 'POST', body: v })
-      setCreating(false); setEditing(null); setAll(emptyForm)
+      const body = ratesVisible ? { ...v, crewRates: rates } : v
+      if (editing) await api(`/projects/phases/${editing.id}`, { method: 'PATCH', body })
+      else await api(`/projects/${project.id}/phases`, { method: 'POST', body })
+      setCreating(false); setEditing(null); setAll(emptyForm); setRates({})
       load()
     } catch (err) { setFormError(err.message) } finally { setSavingPhase(false) }
   }
@@ -76,11 +85,11 @@ export default function Kanban() {
     setFormError(null)
     setAll({
       name: ph.name, budget: ph.budget || '',
-      costPerBuilder: ph.costPerBuilder || '', costPerHelper: ph.costPerHelper || '',
       startDate: ph.startDate ? ph.startDate.slice(0, 10) : '',
       endDate: ph.endDate ? ph.endDate.slice(0, 10) : '',
       assigneeId: ph.assignee?.id ?? '',
     })
+    setRates(ph.crewRates ?? {})
     setEditing(ph)
   }
 
@@ -100,10 +109,13 @@ export default function Kanban() {
   // ---- Phase CSV template + bulk upload (rows land in "To do") ----
 
   const downloadTemplate = () => {
+    // One "rate <type>" column per crew type the company uses.
+    const rateCols = workerTypes.map((t) => `rate ${t}`)
+    const sample = workerTypes.map((_, i) => (i === 0 ? '9000' : i === 1 ? '5000' : ''))
     const csv = [
-      'name,startDate,endDate,budget,costPerBuilder,costPerHelper',
-      'Foundation,2026-08-01,2026-09-15,5000000,9000,5000',
-      'Roofing,2026-09-16,2026-10-20,3500000,,',
+      ['name', 'startDate', 'endDate', 'budget', ...rateCols].join(','),
+      ['Phase 1,2026-08-01,2026-09-15,5000000', ...sample].join(','),
+      ['Phase 2,2026-09-16,2026-10-20,3500000', ...workerTypes.map(() => '')].join(','),
     ].join('\n')
     const a = document.createElement('a')
     a.href = URL.createObjectURL(new Blob([csv], { type: 'text/csv' }))
@@ -136,15 +148,26 @@ export default function Kanban() {
       const text = await file.text()
       const lines = text.split(/\r?\n/).filter((l) => l.trim())
       if (lines.length < 2) throw new Error('The file has no data rows - download the template to see the format')
-      const headers = parseCsvLine(lines[0]).map((h) => h.toLowerCase().replace(/[^a-z]/g, ''))
+      const rawHeaders = parseCsvLine(lines[0]).map((h) => h.trim().toLowerCase())
+      const headers = rawHeaders.map((h) => h.replace(/[^a-z]/g, ''))
+      // "rate technician" -> technician. Files from the earlier template carry
+      // costPerBuilder / costPerHelper instead.
+      const rateCols = rawHeaders.flatMap((h, i) => {
+        const m = h.match(/^rate[\s:_-]+(.+)$/)
+        if (m) return [[i, m[1].trim()]]
+        if (headers[i] === 'costperbuilder') return [[i, 'builder']]
+        if (headers[i] === 'costperhelper') return [[i, 'helper']]
+        return []
+      })
       const col = (h) => headers.indexOf(h)
-      if (col('name') === -1) throw new Error('The first line must be the template header (name, startDate, endDate, budget, costPerBuilder, costPerHelper)')
+      if (col('name') === -1) throw new Error('The first line must be the template header (name, startDate, endDate, budget, then one "rate <type>" column per crew type)')
       const rows = lines.slice(1).map((line) => {
         const cells = parseCsvLine(line)
         const pick = (h) => (col(h) === -1 ? '' : cells[col(h)] ?? '')
         return {
           name: pick('name'), startDate: pick('startdate'), endDate: pick('enddate'),
-          budget: pick('budget'), costPerBuilder: pick('costperbuilder'), costPerHelper: pick('costperhelper'),
+          budget: pick('budget'),
+          crewRates: Object.fromEntries(rateCols.map(([i, type]) => [type, cells[i] ?? ''])),
         }
       })
       const r = await api(`/projects/${project.id}/phases/bulk`, { method: 'POST', body: { phases: rows } })
@@ -384,7 +407,7 @@ export default function Kanban() {
 
       {(creating || editing) && (
         <Modal title={editing ? `Edit phase - ${editing.name}` : `New phase - ${project.name}`}
-          onClose={() => { setCreating(false); setEditing(null); setAll(emptyForm) }}>
+          onClose={() => { setCreating(false); setEditing(null); setAll(emptyForm); setRates({}) }}>
           <ErrorNote error={formError} />
           <form onSubmit={savePhase}>
             <Field label="Phase name *"><input value={v.name} onChange={set('name')} required autoFocus /></Field>
@@ -398,9 +421,22 @@ export default function Kanban() {
                   {siteEngineers.map((t) => <option key={t.id} value={t.id}>{t.name} ({t.role === 'SITE' ? 'Site Eng.' : 'Senior Eng.'})</option>)}
                 </select>
               </Field>
-              <Field label={`Cost per builder / day (${cur})`}><input type="number" min="0" value={v.costPerBuilder} onChange={set('costPerBuilder')} /></Field>
-              <Field label={`Cost per helper / day (${cur})`}><input type="number" min="0" value={v.costPerHelper} onChange={set('costPerHelper')} /></Field>
             </div>
+            {ratesVisible && (
+              <>
+                <div className="small muted" style={{ margin: '4px 0 6px' }}>
+                  Daily rate per crew type - estimates crew cost on days without attendance records.
+                </div>
+                <div className="grid grid-2" style={{ gap: 0, columnGap: 12 }}>
+                  {rateTypes.map((t) => (
+                    <Field key={t} label={`${label(t)} / day (${cur})`}>
+                      <input type="number" min="0" value={rates[t] ?? ''}
+                        onChange={(e) => setRates((r) => ({ ...r, [t]: e.target.value }))} />
+                    </Field>
+                  ))}
+                </div>
+              </>
+            )}
             <button className="btn" style={{ width: '100%', justifyContent: 'center' }} disabled={savingPhase}>
               {savingPhase ? 'Saving…' : editing ? 'Save changes' : 'Create phase'}
             </button>

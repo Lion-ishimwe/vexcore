@@ -55,7 +55,7 @@ const MARK = (size = 64, bg = '#F59E0B', fg = '#0B1220') => `
 const brand = (tone = 'dark') => `
 <div class="brand ${tone}">
   ${MARK(60)}
-  <div><div class="brand-name">VEXCORE</div><div class="brand-sub">Construction Management</div></div>
+  <div><div class="brand-name">VEXCORE</div><div class="brand-sub">Project &amp; Site Management</div></div>
 </div>`
 
 const qrSvg = await QRCode.toString(`https://${SITE}`, {
@@ -172,7 +172,7 @@ const flyers = {}
 flyers['01-run-every-site'] = page('VEXCORE - Run every site', `
 <div class="stripe top"></div>
 <div class="top-row">${brand()}</div>
-<div class="kicker">CONSTRUCTION MANAGEMENT SOFTWARE</div>
+<div class="kicker">PROJECT &amp; SITE MANAGEMENT SOFTWARE</div>
 <h1 style="font-size:86px">Run every site<br>from <span class="amber">one app.</span></h1>
 <p class="lede" style="max-width:860px">Projects, workers, stock and daily site reports - all in one place, on any phone or computer.</p>
 <div style="display:flex;gap:40px;margin-top:34px;align-items:flex-start">
@@ -292,7 +292,7 @@ flyers['04-stock-control'] = page('VEXCORE - Stock control', `
 <div style="position:absolute;inset:0 0 auto 0;height:640px;background:var(--amber)"></div>
 <div style="position:absolute;inset:0 0 auto 0;height:640px;background:linear-gradient(rgba(11,18,32,.06) 1px,transparent 1px) 0 0/44px 44px,linear-gradient(90deg,rgba(11,18,32,.06) 1px,transparent 1px) 0 0/44px 44px"></div>
 <div style="position:relative;display:flex;flex-direction:column;height:100%">
-  <div class="top-row"><div class="brand light">${MARK(60, '#0B1220', '#F59E0B')}<div><div class="brand-name">VEXCORE</div><div class="brand-sub" style="color:#7C4A03">Construction Management</div></div></div></div>
+  <div class="top-row"><div class="brand light">${MARK(60, '#0B1220', '#F59E0B')}<div><div class="brand-name">VEXCORE</div><div class="brand-sub" style="color:#7C4A03">Project &amp; Site Management</div></div></div></div>
   <div class="kicker" style="background:rgba(11,18,32,.1);border-color:rgba(11,18,32,.25);color:var(--navy)">STOCK &amp; STORES</div>
   <h1 style="font-size:90px;color:var(--navy)">Know where every<br>bag of cement goes.</h1>
   <div style="margin-top:44px;background:#fff;border-radius:28px;box-shadow:0 30px 70px rgba(11,18,32,.25);overflow:hidden;color:var(--ink)">

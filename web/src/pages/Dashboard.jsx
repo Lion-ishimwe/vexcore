@@ -193,8 +193,11 @@ export default function Dashboard() {
               </div>
               {u.note && <div className="update-note">{u.note}</div>}
               <div className="chips">
-                <span className="chip"><HardHat size={12} /> {u.builders} builders</span>
-                <span className="chip"><Users size={12} /> {u.helpers} helpers</span>
+                {(u.crew ?? []).map((c, i) => (
+                  <span className="chip" key={i}>
+                    {c.type === 'helper' ? <Users size={12} /> : <HardHat size={12} />} {c.count} {c.type}{c.count === 1 ? '' : 's'}
+                  </span>
+                ))}
                 {u.photos > 0 && <span className="chip"><Camera size={12} /> {u.photos} photos</span>}
                 {u.videos > 0 && <span className="chip"><Video size={12} /> {u.videos} video</span>}
                 {u.geotag && <span className="chip"><MapPin size={12} /> {u.geotag}</span>}

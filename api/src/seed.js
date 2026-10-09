@@ -84,7 +84,7 @@ async function main() {
   const phase = (projectId, name, status, percent, startD, endD, budget, cpb, cph, assigneeId, orderIdx) =>
     db.phase.create({
       data: {
-        projectId, name, status, percent, budget, costPerBuilder: cpb, costPerHelper: cph,
+        projectId, name, status, percent, budget, crewRates: { builder: cpb, helper: cph },
         startDate: ago(startD), endDate: status === 'done' ? ago(endD) : ahead(endD),
         assigneeId, orderIdx,
       },
@@ -116,7 +116,10 @@ async function main() {
 
   const upd = (projectId, phaseId, userId, builders, helpers, note, geotag, daysAgo, forwarded) =>
     db.dailyUpdate.create({
-      data: { clientId: cid, projectId, phaseId, userId, builders, helpers, note, geotag, forwarded, createdAt: ago(daysAgo) },
+      data: {
+        clientId: cid, projectId, phaseId, userId, note, geotag, forwarded, createdAt: ago(daysAgo),
+        crew: [{ type: 'builder', count: builders }, { type: 'helper', count: helpers }].filter(c => c.count > 0),
+      },
     })
   // A few weeks of labor history so phase spend is realistic
   for (let d = 20; d > 0; d--) {

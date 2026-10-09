@@ -36,7 +36,8 @@ export default function Attendance() {
   const [phaseId, setPhaseId] = useState('')
 
   // workers tab
-  const [wForm, wSet, wSetAll] = useForm({ name: '', type: 'builder', phone: '', cardId: '', dailyRate: '', projectId: '' })
+  const crewTypes = client?.settings?.workerTypes ?? ['builder', 'helper']
+  const [wForm, wSet, wSetAll] = useForm({ name: '', type: crewTypes[0], phone: '', cardId: '', dailyRate: '', projectId: '' })
   const [projF, setProjF] = useState('') // project filter: '' all | 'general' | id
   const [enrolOpen, setEnrolOpen] = useState(false)
   const [bulkResult, setBulkResult] = useState(null) // { added, skipped[] }
@@ -155,7 +156,7 @@ export default function Attendance() {
     setEnrolBusy(true)
     try {
       await api('/attendance/workers', { method: 'POST', body: wForm })
-      wSetAll({ name: '', type: 'builder', phone: '', cardId: '', dailyRate: '', projectId: '' })
+      wSetAll({ name: '', type: crewTypes[0], phone: '', cardId: '', dailyRate: '', projectId: '' })
       setEnrolOpen(false)
       loadWorkers()
     } finally { setEnrolBusy(false) }
@@ -164,9 +165,9 @@ export default function Attendance() {
   const downloadTemplate = () => {
     const csv = [
       'name,type,phone,dailyRate',
-      'Jean Bosco,builder,+250788000001,9000',
-      'Marie Claire,helper,+250788000002,5000',
-      'Pascal N.,builder,,',
+      `Jean Bosco,${crewTypes[0]},+250788000001,9000`,
+      `Marie Claire,${crewTypes[1] ?? crewTypes[0]},+250788000002,5000`,
+      `Pascal N.,${crewTypes[0]},,`,
     ].join('\n')
     const a = document.createElement('a')
     a.href = URL.createObjectURL(new Blob([csv], { type: 'text/csv' }))
@@ -764,7 +765,7 @@ export default function Attendance() {
                 <div className="grid grid-2" style={{ gap: 0, columnGap: 12 }}>
                   <Field label="Type">
                     <select value={wForm.type} onChange={wSet('type')}>
-                      {(client?.settings?.workerTypes ?? ['builder', 'helper']).map((t) => (
+                      {crewTypes.map((t) => (
                         <option key={t} value={t} style={{ textTransform: 'capitalize' }}>
                           {t.charAt(0).toUpperCase() + t.slice(1)}
                         </option>
@@ -891,7 +892,7 @@ export default function Attendance() {
                           <img className="idc2-logo big" src={badges.logo || '/logo.png'} alt="" />
                           <b>{badges.company?.toUpperCase()}</b>
                           <i className="idcb2-rule" />
-                          <span className="idcb2-sub">POWERED BY VEXCORE - CONSTRUCTION MANAGEMENT SYSTEM</span>
+                          <span className="idcb2-sub">POWERED BY VEXCORE - PROJECT &amp; SITE MANAGEMENT</span>
                         </div>
                         <div className="idc2-block dark">
                           <div><span>Property of</span><b>{badges.company}</b></div>

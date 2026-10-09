@@ -8,6 +8,7 @@ import { wagesForProjects } from './projects.js'
 import { photoUpload } from './account.js'
 import { uploader, discardUploads, removeStoredFile } from '../uploads.js'
 import { deleteClientCascade } from '../deleteClient.js'
+import { crewCost, crewOf } from '../crew.js'
 
 const r = Router()
 
@@ -320,7 +321,7 @@ r.get('/dashboard', requireCap('dashboard'), async (req, res) => {
     const paidDays = new Set()
     for (const [day, cell] of byPhase.get(ph.id) ?? []) { wages += cell.amount; paidDays.add(day) }
     const labor = ph.updates.reduce((s, u) => paidDays.has(dayOf(u.createdAt)) ? s
-      : s + u.builders * ph.costPerBuilder + u.helpers * ph.costPerHelper, 0)
+      : s + crewCost(u, ph), 0)
     return wages + labor + ph.materials.reduce((s, m) => s + m.qty * m.unitCostSnap, 0)
   }
 
@@ -387,7 +388,7 @@ r.get('/dashboard', requireCap('dashboard'), async (req, res) => {
     latestUpdates: updates.map(u => ({
       id: u.id, by: u.user.name, byPhoto: u.user.photo ? '/uploads/' + u.user.photo : null,
       project: u.project.name, phase: u.phase?.name, note: u.note,
-      builders: u.builders, helpers: u.helpers, geotag: u.geotag, createdAt: u.createdAt,
+      crew: crewOf(u), geotag: u.geotag, createdAt: u.createdAt,
       photos: u.media.filter(m => m.kind === 'photo').length,
       videos: u.media.filter(m => m.kind === 'video').length,
     })),
@@ -517,7 +518,7 @@ r.get('/reports', requireCap('reports'), async (req, res) => {
     let crewAll = 0
     for (const u of ph.updates) {
       if (wd.has(dayKey(u.createdAt))) continue
-      const c = u.builders * ph.costPerBuilder + u.helpers * ph.costPerHelper
+      const c = crewCost(u, ph)
       crewAll += c
       if (c > 0 && inRange(u.createdAt)) {
         crewRange += c

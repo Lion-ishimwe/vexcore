@@ -810,7 +810,6 @@ r.get('/counts', requireCap('attendance.view'), async (req, res) => {
     },
   })
   const seen = new Set()
-  let builders = 0, helpers = 0
   const byType = {}
   const workers = []
   for (const s of sessions) {
@@ -820,12 +819,10 @@ r.get('/counts', requireCap('attendance.view'), async (req, res) => {
       seen.add(rec.workerId)
       const type = rec.worker.type
       byType[type] = (byType[type] ?? 0) + 1
-      if (type === 'helper') helpers++
-      else builders++
       workers.push({ name: rec.worker.name, type, phase: s.phase?.name ?? null })
     }
   }
-  res.json({ builders, helpers, byType, workers })
+  res.json({ total: workers.length, byType, workers })
 })
 
 // Attendance report over a date range → rows per worker, columns per day.

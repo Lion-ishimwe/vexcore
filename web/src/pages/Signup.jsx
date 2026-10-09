@@ -10,7 +10,7 @@ export default function Signup() {
   const nav = useNavigate()
   const [v, set] = useForm({
     company: '', name: '', email: '', password: '', contact: '',
-    country: 'Rwanda', location: '', tin: '', currency: 'RWF',
+    country: 'Rwanda', location: '', tin: '', currency: 'RWF', industry: 'construction',
   })
   const [error, setError] = useState(null)
   const [busy, setBusy] = useState(false)
@@ -48,6 +48,14 @@ export default function Signup() {
               <Field label="Location *"><input value={v.location} onChange={set('location')} required placeholder="City / district" /></Field>
               <Field label="TIN number"><input value={v.tin} onChange={set('tin')} placeholder="Optional" /></Field>
             </div>
+            <Field label="What kind of projects do you run?">
+              <select value={v.industry} onChange={set('industry')}>
+                <option value="construction">Construction</option>
+                <option value="mep">HVAC, electrical &amp; plumbing</option>
+                <option value="it">IT &amp; networking</option>
+                <option value="other">Other field projects</option>
+              </select>
+            </Field>
             <Field label="Currency (used across your projects)">
               <select value={v.currency} onChange={set('currency')}>
                 <option value="RWF">RWF - Rwandan Franc</option>

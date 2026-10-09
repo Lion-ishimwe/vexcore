@@ -164,8 +164,7 @@ model Phase {
   startDate     DateTime?
   endDate       DateTime?
   budget        Int      @default(0)
-  costPerBuilder Int     @default(0)
-  costPerHelper  Int     @default(0)
+  crewRates      Json?   // daily rate per worker type for the crew estimate: { "technician": 15000, "helper": 6000 }
   signedOffAt   DateTime? // set when the phase is marked done; cleared on reopen
   signedOffBy   String?
   assigneeId    Int?
@@ -224,9 +223,7 @@ model DailyUpdate {
   phase     Phase?   @relation(fields: [phaseId], references: [id])
   userId    Int
   user      User     @relation(fields: [userId], references: [id])
-  builders  Int      @default(0)
-  helpers   Int      @default(0)
-  crew      Json?    // [{ type, count }] per worker type on site
+  crew      Json?    // [{ type, count }] per worker type on site - the report's only head-count
   note      String?  @db.Text
   geotag    String?
   forwarded Boolean  @default(false)
