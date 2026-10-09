@@ -1,0 +1,147 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>VEXCORE - Run every site</title>
+<meta name="viewport" content="width=1080"><style>
+@import url('https://fonts.googleapis.com/css2?family=Poppins:wght@400;500;600;700;800;900&display=swap');
+:root{--navy:#0B1220;--navy2:#111B30;--slate:#1E293B;--line:#26344F;--amber:#F59E0B;--amber2:#FBBF24;--amberD:#B45309;
+  --cream:#FFF8EC;--ink:#0F172A;--muted:#94A3B8;--soft:#CBD5E1;--green:#16A34A;--red:#DC2626}
+*{box-sizing:border-box;margin:0;padding:0}
+html,body{width:1080px;height:1350px;overflow:hidden;background:var(--navy)}
+body{font-family:'Poppins',system-ui,sans-serif;-webkit-font-smoothing:antialiased;color:#fff}
+.flyer{position:relative;width:1080px;height:1350px;overflow:hidden;padding:60px 76px 56px;display:flex;flex-direction:column}
+.ic{flex:none;display:block}
+.amber{color:var(--amber)}
+
+/* backgrounds */
+.bg-dark{background:
+  radial-gradient(900px 600px at 105% -5%, rgba(245,158,11,.20), transparent 60%),
+  radial-gradient(700px 500px at -10% 110%, rgba(245,158,11,.10), transparent 60%),
+  linear-gradient(rgba(255,255,255,.035) 1px, transparent 1px) 0 0/44px 44px,
+  linear-gradient(90deg, rgba(255,255,255,.035) 1px, transparent 1px) 0 0/44px 44px,
+  var(--navy)}
+.bg-cream{background:
+  linear-gradient(rgba(15,23,42,.045) 1px, transparent 1px) 0 0/44px 44px,
+  linear-gradient(90deg, rgba(15,23,42,.045) 1px, transparent 1px) 0 0/44px 44px,
+  var(--cream); color:var(--ink)}
+.stripe{position:absolute;left:0;right:0;height:14px;background:repeating-linear-gradient(-45deg,var(--amber) 0 22px,var(--navy) 22px 44px)}
+.stripe.top{top:0}.stripe.bottom{bottom:0}
+
+/* brand */
+.brand{display:flex;align-items:center;gap:18px}
+.brand-name{font-weight:800;font-size:34px;letter-spacing:.16em;line-height:1}
+.brand-sub{font-size:16px;font-weight:500;letter-spacing:.06em;color:var(--muted);margin-top:6px}
+.brand.light .brand-name{color:var(--ink)} .brand.light .brand-sub{color:#64748B}
+.top-row{display:flex;justify-content:space-between;align-items:center}
+
+.kicker{display:inline-flex;align-self:flex-start;align-items:center;gap:10px;margin-top:38px;padding:10px 20px;border-radius:999px;
+  background:rgba(245,158,11,.14);border:1.5px solid rgba(245,158,11,.45);color:var(--amber2);font-weight:700;font-size:19px;letter-spacing:.14em}
+.kicker.on-light{background:#FEF3C7;border-color:#F8D58A;color:var(--amberD)}
+h1{font-weight:800;letter-spacing:-.025em;line-height:1.02;margin-top:22px}
+.lede{font-size:30px;line-height:1.42;color:var(--soft);margin-top:22px;font-weight:400}
+.on-light .lede,.lede.dark{color:#475569}
+
+/* CTA footer */
+.cta{display:flex;align-items:center;justify-content:space-between;gap:28px;border-radius:28px;padding:28px 30px 28px 40px;margin-top:auto}
+.cta.amber{background:var(--amber);color:var(--navy)}
+.cta.navy{background:var(--navy);color:#fff}
+.cta-kicker{font-size:21px;font-weight:700;letter-spacing:.02em;opacity:.85}
+.cta-url{font-size:56px;font-weight:800;letter-spacing:-.02em;line-height:1.1;margin-top:2px}
+.cta-phone{display:flex;align-items:center;gap:10px;font-size:25px;margin-top:10px}
+.cta-phone span{font-size:19px;font-weight:500;opacity:.75;margin-left:6px}
+.cta-qr{background:#fff;border-radius:18px;padding:14px 14px 8px;text-align:center;color:var(--navy);font-size:14px;font-weight:700;letter-spacing:.08em;text-transform:uppercase}
+.cta-qr svg{width:150px;height:150px;display:block}
+.cta-qr div{margin-top:6px}
+
+/* phone mockup */
+.phone{width:340px;border-radius:46px;background:#05080F;padding:12px;box-shadow:0 40px 80px rgba(0,0,0,.55),0 0 0 2px #2A3650 inset}
+.screen{border-radius:36px;background:#F1F5F9;overflow:hidden;color:var(--ink);height:100%}
+.notch{width:110px;height:26px;border-radius:0 0 16px 16px;background:#05080F;margin:0 auto}
+.app-bar{display:flex;align-items:center;justify-content:space-between;padding:10px 20px 12px}
+.app-bar b{font-size:20px}
+.app-bar .dot{width:34px;height:34px;border-radius:50%;background:var(--amber);display:grid;place-items:center;font-weight:800;font-size:14px;color:var(--navy)}
+.tiles{display:grid;grid-template-columns:1fr 1fr;gap:10px;padding:0 16px}
+.tile{background:#fff;border-radius:16px;padding:12px 14px;box-shadow:0 1px 2px rgba(15,23,42,.06)}
+.tile small{display:block;font-size:12px;color:#64748B;font-weight:500}
+.tile b{font-size:26px;font-weight:800}
+.card{background:#fff;border-radius:16px;padding:14px 16px;margin:10px 16px 0;box-shadow:0 1px 2px rgba(15,23,42,.06)}
+.card h4{font-size:14px;font-weight:700;margin-bottom:8px}
+.bar{display:flex;align-items:center;gap:10px;font-size:12.5px;margin:7px 0;color:#334155}
+.bar span{width:84px;flex:none}
+.bar i{flex:1;height:8px;border-radius:9px;background:#E2E8F0;position:relative;overflow:hidden}
+.bar i::after{content:"";position:absolute;inset:0;width:var(--w);background:var(--c,var(--amber));border-radius:9px}
+.bar em{font-style:normal;font-weight:700;width:38px;text-align:right}
+.photo{height:92px;border-radius:12px;background:
+  linear-gradient(160deg,rgba(11,18,32,.0),rgba(11,18,32,.55)),
+  repeating-linear-gradient(90deg,#C08A3E 0 18px,#A8742F 18px 20px),
+  linear-gradient(#7DB3E0,#B9D8F0 55%,#C08A3E 55%);position:relative}
+.photo::before{content:"";position:absolute;left:18%;bottom:30%;width:46%;height:46%;border:5px solid #5B6B82;border-bottom:none;border-radius:2px}
+.meta{display:flex;align-items:center;gap:6px;font-size:12px;color:#64748B;margin-top:8px}
+.meta .ic{color:var(--amber)}
+
+/* feature rows */
+.feat{display:flex;align-items:center;gap:20px}
+.feat .tilei{width:64px;height:64px;border-radius:18px;display:grid;place-items:center;background:rgba(245,158,11,.14);border:1.5px solid rgba(245,158,11,.35);color:var(--amber2);flex:none}
+.feat b{display:block;font-size:26px;font-weight:700;line-height:1.2}
+.feat small{display:block;font-size:20px;color:var(--muted);margin-top:3px;line-height:1.3}
+</style></head>
+<body><div class="flyer bg-dark">
+<div class="stripe top"></div>
+<div class="top-row">
+<div class="brand dark">
+  
+<svg width="60" height="60" viewBox="0 0 48 48" aria-label="VEXCORE">
+  <rect width="48" height="48" rx="12" fill="#F59E0B"/>
+  <path d="M11 12h7.2L24 28.4 29.8 12H37l-9.6 24h-6.8z" fill="#0B1220"/>
+  <rect x="11" y="38.5" width="26" height="3" rx="1.5" fill="#0B1220" opacity=".35"/>
+</svg>
+  <div><div class="brand-name">VEXCORE</div><div class="brand-sub">Construction Management</div></div>
+</div></div>
+<div class="kicker">CONSTRUCTION MANAGEMENT SOFTWARE</div>
+<h1 style="font-size:86px">Run every site<br>from <span class="amber">one app.</span></h1>
+<p class="lede" style="max-width:860px">Projects, workers, stock and daily site reports - all in one place, on any phone or computer.</p>
+<div style="display:flex;gap:40px;margin-top:34px;align-items:flex-start">
+  <div style="flex:1;display:flex;flex-direction:column;gap:26px;padding-top:8px">
+    <div class="feat"><div class="tilei"><svg class="ic" width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M14.5 4h-5L7 7H4a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2h-3l-2.5-3z"/><circle cx="12" cy="13" r="3"/></svg></div><div><b>Daily site reports</b><small>Photos, crew counts, time &amp; location</small></div></div>
+    <div class="feat"><div class="tilei"><svg class="ic" width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><rect width="5" height="5" x="3" y="3" rx="1"/><rect width="5" height="5" x="16" y="3" rx="1"/><rect width="5" height="5" x="3" y="16" rx="1"/><path d="M21 16h-3a2 2 0 0 0-2 2v3"/><path d="M21 21v.01"/><path d="M12 7v3a2 2 0 0 1-2 2H7"/><path d="M3 12h.01"/><path d="M12 3h.01"/><path d="M12 16v.01"/><path d="M16 12h1"/><path d="M21 12v.01"/><path d="M12 21v-1"/></svg></div><div><b>QR attendance</b><small>Workers clock in, wages add up</small></div></div>
+    <div class="feat"><div class="tilei"><svg class="ic" width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="m7.5 4.27 9 5.15"/><path d="M21 8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16Z"/><path d="m3.3 7 8.7 5 8.7-5"/><path d="M12 22V12"/></svg></div><div><b>Stock control</b><small>Every item issued is on record</small></div></div>
+    <div class="feat"><div class="tilei"><svg class="ic" width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3v18h18"/><path d="M18 17V9"/><path d="M13 17V5"/><path d="M8 17v-3"/></svg></div><div><b>Budget vs actual</b><small>See spending per project</small></div></div>
+  </div>
+  <div class="phone" style="height:470px;transform:rotate(3deg);margin-right:6px">
+    <div class="screen">
+      <div class="notch"></div>
+      <div class="app-bar"><b>Dashboard</b><div class="dot">JM</div></div>
+      <div class="tiles">
+        <div class="tile"><small>Active projects</small><b>3</b></div>
+        <div class="tile"><small>Completion</small><b>68%</b></div>
+      </div>
+      <div class="card"><h4>Phase completion</h4>
+        <div class="bar"><span>Foundation</span><i style="--w:100%;--c:#16A34A"></i><em>100%</em></div>
+        <div class="bar"><span>Structure</span><i style="--w:72%"></i><em>72%</em></div>
+        <div class="bar"><span>Roofing</span><i style="--w:38%"></i><em>38%</em></div>
+      </div>
+      <div class="card"><h4>Latest from the site</h4>
+        <svg class="photo-svg" viewBox="0 0 280 100" width="100%" style="display:block;border-radius:12px">
+          <defs><linearGradient id="sky" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#7FB6E6"/><stop offset="1" stop-color="#CFE5F6"/></linearGradient></defs>
+          <rect width="280" height="100" fill="url(#sky)"/>
+          <ellipse cx="60" cy="96" rx="140" ry="16" fill="#8FAE6B"/><rect y="86" width="280" height="14" fill="#B98E57"/>
+          <g fill="#9AA6B8"><rect x="96" y="30" width="118" height="5"/><rect x="96" y="50" width="118" height="5"/><rect x="96" y="70" width="118" height="5"/></g>
+          <g fill="#6B7A90"><rect x="98" y="30" width="6" height="56"/><rect x="136" y="30" width="6" height="56"/><rect x="172" y="30" width="6" height="56"/><rect x="206" y="30" width="6" height="56"/></g>
+          <g fill="#C9A06A" opacity=".9"><rect x="104" y="57" width="32" height="13"/><rect x="142" y="57" width="30" height="13"/><rect x="178" y="77" width="28" height="9"/></g>
+          <g stroke="#F59E0B" stroke-width="3" fill="none"><path d="M54 86V14"/><path d="M40 14h104"/><path d="M54 26 66 14"/><path d="M128 14v26"/></g>
+          <rect x="122" y="40" width="12" height="7" fill="#F59E0B"/><rect x="44" y="80" width="20" height="6" fill="#475569"/>
+        </svg>
+        <div class="meta"><svg class="ic" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 10c0 6-8 12-8 12s-8-6-8-12a8 8 0 0 1 16 0Z"/><circle cx="12" cy="10" r="3"/></svg> Kacyiru site · 18 builders · 16:40</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="cta amber">
+  <div class="cta-text">
+    <div class="cta-kicker">Start your 14-day free trial</div>
+    <div class="cta-url">core.vexa.rw</div>
+    <div class="cta-phone"><svg class="ic" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72 12.84 12.84 0 0 0 .7 2.81 2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45 12.84 12.84 0 0 0 2.81.7A2 2 0 0 1 22 16.92z"/></svg> <b>0785 576 541</b><span>Call or WhatsApp</span></div>
+  </div>
+  <div class="cta-qr"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 25 25" shape-rendering="crispEdges"><path fill="#FFFFFF" d="M0 0h25v25H0z"/><path stroke="#0B1220" d="M0 0.5h7m2 0h4m1 0h1m1 0h1m1 0h7M0 1.5h1m5 0h1m1 0h1m1 0h1m2 0h2m1 0h1m1 0h1m5 0h1M0 2.5h1m1 0h3m1 0h1m1 0h1m1 0h2m3 0h1m2 0h1m1 0h3m1 0h1M0 3.5h1m1 0h3m1 0h1m1 0h6m2 0h1m1 0h1m1 0h3m1 0h1M0 4.5h1m1 0h3m1 0h1m3 0h1m3 0h1m1 0h1m1 0h1m1 0h3m1 0h1M0 5.5h1m5 0h1m3 0h1m1 0h2m4 0h1m5 0h1M0 6.5h7m1 0h1m1 0h1m1 0h1m1 0h1m1 0h1m1 0h7M8 7.5h4M0 8.5h1m5 0h1m1 0h1m1 0h5m1 0h3m2 0h3M0 9.5h5m2 0h2m1 0h1m4 0h1m3 0h5M1 10.5h1m1 0h1m2 0h2m1 0h1m3 0h5m1 0h3m1 0h2M1 11.5h2m1 0h1m2 0h2m3 0h1m1 0h1m1 0h2m3 0h1m2 0h1M1 12.5h1m3 0h2m1 0h1m1 0h2m1 0h4m1 0h2m4 0h1M0 13.5h2m1 0h3m2 0h1m1 0h1m1 0h2m1 0h3m1 0h1m3 0h1M0 14.5h1m2 0h4m1 0h2m3 0h3m2 0h4m1 0h2M0 15.5h1m2 0h1m1 0h1m1 0h3m2 0h4m3 0h1m1 0h2m1 0h1M0 16.5h1m1 0h3m1 0h1m1 0h1m1 0h1m1 0h1m1 0h7m1 0h1M8 17.5h2m5 0h2m3 0h1M0 18.5h7m2 0h1m2 0h3m1 0h1m1 0h1m1 0h1m3 0h1M0 19.5h1m5 0h1m3 0h2m2 0h3m3 0h1m3 0h1M0 20.5h1m1 0h3m1 0h1m2 0h3m3 0h6m1 0h3M0 21.5h1m1 0h3m1 0h1m2 0h1m2 0h2m3 0h2m4 0h2M0 22.5h1m1 0h3m1 0h1m3 0h1m2 0h2m1 0h1m4 0h2m1 0h1M0 23.5h1m5 0h1m3 0h1m1 0h2m2 0h5m3 0h1M0 24.5h7m1 0h6m1 0h2m1 0h1m2 0h1m2 0h1"/></svg>
+<div>Scan to start</div></div>
+</div>
+</div></body></html>
