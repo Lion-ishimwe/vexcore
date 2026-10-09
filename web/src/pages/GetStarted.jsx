@@ -16,9 +16,9 @@ export function PubNav() {
   return (
     <nav className="mk-nav">
       <Link to="/" className="mk-brand">
-        <img className="logo-mark" src="/logo.png" alt="CMS logo" />
+        <img className="logo-mark" src="/logo.png" alt="VEXCORE logo" />
         <div>
-          <div className="logo-name" style={{ color: 'var(--text)' }}>CMS</div>
+          <div className="logo-name" style={{ color: 'var(--text)' }}>VEXCORE</div>
           <div className="logo-sub">Construction Management System</div>
         </div>
       </Link>
@@ -41,15 +41,15 @@ export function PubFoot() {
       <div className="mk-foot-grid">
         <div>
           <div className="mk-brand" style={{ marginBottom: 12 }}>
-            <img className="logo-mark" src="/logo.png" alt="CMS logo" />
-            <div className="logo-name" style={{ color: '#fff' }}>CMS</div>
+            <img className="logo-mark" src="/logo.png" alt="VEXCORE logo" />
+            <div className="logo-name" style={{ color: '#fff' }}>VEXCORE</div>
           </div>
           <p>One place to plan projects, track daily progress, manage stock, and control spending - built for construction teams in East Africa.</p>
         </div>
         <div>
           <h5>Get in touch</h5>
           <a href="mailto:support@bridge.app">support@bridge.app</a>
-          <a href="tel:+250788000000">+250 788 000 000</a>
+          <a href="tel:+250785576541">+250 785 576 541</a>
           <span>Kigali, Rwanda</span>
         </div>
         <div>
@@ -67,7 +67,7 @@ export function PubFoot() {
           <span>Reports &amp; audit trail</span>
         </div>
       </div>
-      <div className="mk-foot-base">© 2026 CMS · Construction Management System · All rights reserved</div>
+      <div className="mk-foot-base">© 2026 VEXCORE · Construction Management System · All rights reserved</div>
     </footer>
   )
 }
@@ -77,7 +77,7 @@ function HeroMock() {
     <div className="mock-window" aria-hidden="true">
       <div className="mock-title">
         <span /><span /><span />
-        <b>CMS - Dashboard</b>
+        <b>VEXCORE - Dashboard</b>
       </div>
       <div className="mock-body">
         <div className="mock-side">
@@ -133,7 +133,7 @@ function FlowSection() {
         <div className="comp-desktop">
           <div className="comp-top">
             <span /><span /><span />
-            <b>CMS - Dashboard</b>
+            <b>VEXCORE - Dashboard</b>
             <i>EM</i>
           </div>
           <div className="comp-body">

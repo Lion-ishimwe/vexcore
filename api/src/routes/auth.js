@@ -225,7 +225,7 @@ r.post('/forgot', forgotIpLimit, forgotLimit, async (req, res) => {
   await db.resetToken.create({
     data: { userId: user.id, token, expiresAt: new Date(Date.now() + 3600 * 1000) },
   })
-  sendMail(user.email, 'Reset your CMS password', {
+  sendMail(user.email, 'Reset your VEXCORE password', {
     title: 'Reset your password',
     lines: [
       `Hi ${user.name},`,

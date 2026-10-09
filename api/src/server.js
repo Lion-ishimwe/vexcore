@@ -125,4 +125,4 @@ app.use((err, req, res, next) => {
 })
 
 const PORT = process.env.PORT || 4311
-app.listen(PORT, () => console.log(`CMS API on :${PORT}`))
+app.listen(PORT, () => console.log(`VEXCORE API on :${PORT}`))

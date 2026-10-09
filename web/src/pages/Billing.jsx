@@ -136,7 +136,7 @@ export default function Billing() {
               </div>
               {p.price == null ? (
                 <button className="btn ghost" style={{ width: '100%', justifyContent: 'center' }}
-                  onClick={() => setError('Enterprise plans are arranged directly - email support@bridge.app or call +250 788 000 000.')}>
+                  onClick={() => setError('Enterprise plans are arranged directly - email support@bridge.app or call +250 785 576 541.')}>
                   Contact us
                 </button>
               ) : (

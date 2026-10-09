@@ -206,9 +206,9 @@ export default function App() {
     <div className="app">
       <aside className="sidebar">
         <div className="logo">
-          <img className="logo-mark" src="/logo.png" alt="CMS logo" />
+          <img className="logo-mark" src="/logo.png" alt="VEXCORE logo" />
           <div>
-            <div className="logo-name">CMS</div>
+            <div className="logo-name">VEXCORE</div>
             <div className="logo-sub">{isSuper ? 'Platform operator' : client?.company}</div>
           </div>
         </div>
@@ -240,7 +240,7 @@ export default function App() {
           <button className="hamb mobile-only" onClick={() => setMoreOpen(true)} aria-label={t('nav.more')}>
             <Menu size={19} />
           </button>
-          <h1>{(() => { const k = TITLE_KEYS[loc.pathname]; return k ? (k.includes('.') ? t(k) : k) : 'CMS' })()}</h1>
+          <h1>{(() => { const k = TITLE_KEYS[loc.pathname]; return k ? (k.includes('.') ? t(k) : k) : 'VEXCORE' })()}</h1>
           <div className="topbar-right">
             {!isSuper && <WeatherWidget />}
             {!isSuper && <span className="trial-chip desk-only">{trialLabel(client)}</span>}

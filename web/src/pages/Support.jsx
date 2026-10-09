@@ -11,7 +11,7 @@ export default function Support() {
           <p className="sub muted small">We usually respond within one business day.</p>
           <div className="small" style={{ lineHeight: 2.2 }}>
             <div><Mail size={14} /> <b>Email:</b> support@bridge.app</div>
-            <div><Phone size={14} /> <b>Phone / WhatsApp:</b> +250 788 000 000</div>
+            <div><Phone size={14} /> <b>Phone / WhatsApp:</b> +250 785 576 541</div>
             <div><MapPin size={14} /> <b>Office:</b> Kigali, Rwanda</div>
             <div><Clock size={14} /> <b>Hours:</b> Mon–Sat, 08:00–18:00 CAT</div>
           </div>

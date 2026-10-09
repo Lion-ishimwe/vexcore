@@ -89,7 +89,7 @@ export default function Account({ section = 'all' }) {
   const copyCodes = () => navigator.clipboard?.writeText(backupCodes.join('\n'))
   const downloadCodes = () => {
     const blob = new Blob([
-      `CMS (Construction Management System) - 2FA backup codes for ${user.email}\n` +
+      `VEXCORE - 2FA backup codes for ${user.email}\n` +
       `Each code works exactly once. Keep them somewhere safe.\n\n` +
       backupCodes.join('\n') + '\n',
     ], { type: 'text/plain' })

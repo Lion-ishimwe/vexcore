@@ -33,13 +33,13 @@ function icsFor(booking, form) {
   const end = new Date(start.getTime() + 30 * 60000)
   const fmt = (d) => d.toISOString().replace(/[-:]/g, '').replace(/\.\d{3}/, '')
   const ics = [
-    'BEGIN:VCALENDAR', 'VERSION:2.0', 'PRODID:-//CMS Construction Management System//Demo//EN',
+    'BEGIN:VCALENDAR', 'VERSION:2.0', 'PRODID:-//VEXCORE//Demo//EN',
     'BEGIN:VEVENT',
     `UID:bridge-demo-${booking.id}@bridge.app`,
     `DTSTAMP:${fmt(new Date())}`,
     `DTSTART:${fmt(start)}`,
     `DTEND:${fmt(end)}`,
-    'SUMMARY:CMS (Construction Management System) - Live Demo',
+    'SUMMARY:VEXCORE - Live Demo',
     `DESCRIPTION:One-on-one walkthrough for ${form.name}${form.company ? ' (' + form.company + ')' : ''}. We will call you on ${form.phone || form.email}.`,
     'LOCATION:Video call / WhatsApp',
     'END:VEVENT', 'END:VCALENDAR',
@@ -127,7 +127,7 @@ export default function Demo() {
           </div>
 
           <div className="demo-alt">
-            Prefer to talk now? <a href="tel:+250788000000">+250 788 000 000</a> ·{' '}
+            Prefer to talk now? <a href="tel:+250785576541">+250 785 576 541</a> ·{' '}
             <a href="mailto:demo@bridge.app">demo@bridge.app</a>
           </div>
         </div>

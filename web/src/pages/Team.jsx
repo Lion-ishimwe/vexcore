@@ -142,7 +142,7 @@ export default function Team() {
     const csv = rows.map((r) => r.map((c) => `"${String(c).replace(/"/g, '""')}"`).join(',')).join('\n')
     const a = document.createElement('a')
     a.href = URL.createObjectURL(new Blob([csv], { type: 'text/csv' }))
-    a.download = 'cms-team.csv'
+    a.download = 'vexcore-team.csv'
     a.click()
     URL.revokeObjectURL(a.href)
   }
